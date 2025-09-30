@@ -77,7 +77,9 @@ def main():
     print("5. Extract Traditional Features")
     print("6. Quick Test (5 epochs)")
 
-    choice = input("\nSelect option (1-6): ").strip()
+    #choice = input("\nSelect option (1-6): ").strip()
+
+    choice = 3
 
     # Base command
     base_cmd = [
