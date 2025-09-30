@@ -53,7 +53,7 @@ CLASSIFICATION_CLASS_NAMES = [
 # ================================
 # TRAINING PARAMETERS
 # ================================
-BATCH_SIZE = 4
+BATCH_SIZE = 8
 LEARNING_RATE = 1e-4
 NUM_EPOCHS = 50
 EARLY_STOPPING_PATIENCE = 10
