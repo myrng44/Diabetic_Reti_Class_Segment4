@@ -17,7 +17,7 @@ from tqdm import tqdm
 import wandb  # For experiment tracking (optional)
 
 from config import *
-from models import create_segmentation_model, create_classification_model, create_loss_function
+from model import create_segmentation_model, create_classification_model, create_loss_function
 
 
 class EarlyStopping:

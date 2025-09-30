@@ -20,7 +20,7 @@ from datasets import (
     ClassificationDataset, SegmentationDataset, DataSplitter,
     create_data_loaders, analyze_dataset
 )
-from models import create_segmentation_model, create_classification_model
+from model import create_segmentation_model, create_classification_model
 from training import Trainer, Evaluator, plot_training_history
 from gradcam import ExplainabilityPipeline, create_explanation_dashboard
 
