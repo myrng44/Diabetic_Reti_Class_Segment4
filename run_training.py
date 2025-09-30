@@ -79,7 +79,7 @@ def main():
 
     #choice = input("\nSelect option (1-6): ").strip()
 
-    choice = 3
+    choice = '3'
 
     # Base command
     base_cmd = [
