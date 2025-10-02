@@ -11,6 +11,13 @@ from albumentations.pytorch import ToTensorV2
 from skimage import filters
 from config import *
 
+# Import Adaptive Chaotic Gabor if enabled
+if USE_ADAPTIVE_GABOR:
+    try:
+        from adaptive_gabor import AdaptiveChaoticGaborFilter
+    except ImportError:
+        print("Warning: adaptive_gabor.py not found. Using standard preprocessing.")
+        USE_ADAPTIVE_GABOR = False
 
 class FundusPreprocessor:
     """Main preprocessing class for fundus images."""
@@ -199,9 +206,30 @@ def get_segmentation_transforms(target_size=TARGET_SIZE, is_train=True):
 class PreprocessingPipeline:
     """Complete preprocessing pipeline combining all techniques."""
 
-    def __init__(self, use_gabor=True, save_intermediates=False):
+    def __init__(self, use_gabor=USE_ADAPTIVE_GABOR, use_adaptive_gabor=True,
+                 save_intermediates=False):
         self.fundus_preprocessor = FundusPreprocessor()
-        self.gabor_filter = GaborFilter() if use_gabor else None
+
+        # Choose between standard and adaptive chaotic Gabor
+        if use_gabor and use_adaptive_gabor and USE_ADAPTIVE_GABOR:
+            try:
+                from adaptive_gabor import AdaptiveChaoticGaborFilter
+                self.gabor_filter = AdaptiveChaoticGaborFilter(
+                    frequencies=GABOR_FREQUENCIES,
+                    angles=GABOR_ANGLES,
+                    sigma=GABOR_SIGMA,
+                    gamma=GABOR_GAMMA,
+                    ksize=GABOR_KERNEL_SIZE
+                )
+                print("Using Adaptive Chaotic Gabor Filter (Paper method)")
+            except ImportError:
+                self.gabor_filter = GaborFilter() if use_gabor else None
+                print("Using standard Gabor Filter")
+        elif use_gabor:
+            self.gabor_filter = GaborFilter()
+        else:
+            self.gabor_filter = None
+
         self.save_intermediates = save_intermediates
 
     def process_image(self, image, output_dir=None, filename=None):
@@ -224,23 +252,28 @@ class PreprocessingPipeline:
 
         # Step 2: Gabor filtering (optional)
         if self.gabor_filter:
-            gabor_enhanced, gabor_responses = self.gabor_filter.apply_gabor_bank(processed_img)
+            if hasattr(self.gabor_filter, 'process_image'):
+                # Adaptive Chaotic Gabor (Paper method)
+                gabor_enhanced, gabor_result, responses = self.gabor_filter.process_image(
+                    processed_img,
+                    apply_enhancement=True,
+                    apply_denoising=True
+                )
+                intermediate_results['gabor'] = gabor_result
+                intermediate_results['gabor_responses'] = responses[:3]  # Save first 3
+                processed_img = gabor_enhanced
+            else:
+                # Standard Gabor
+                gabor_enhanced, gabor_responses = self.gabor_filter.apply_gabor_bank(processed_img)
+                if len(gabor_enhanced.shape) == 2:
+                    gabor_enhanced = cv2.cvtColor(gabor_enhanced, cv2.COLOR_GRAY2RGB)
+                gabor_enhanced[circle_mask == 0] = 0
+                denoised = self.gabor_filter.denoise(gabor_enhanced)
+                intermediate_results['gabor'] = gabor_enhanced
+                intermediate_results['denoised'] = denoised
+                processed_img = denoised
 
-            # Convert back to RGB for consistency
-            if len(gabor_enhanced.shape) == 2:
-                gabor_enhanced = cv2.cvtColor(gabor_enhanced, cv2.COLOR_GRAY2RGB)
-
-            # Apply mask to gabor result
-            gabor_enhanced[circle_mask == 0] = 0
-
-            # Denoise
-            denoised = self.gabor_filter.denoise(gabor_enhanced)
-
-            intermediate_results['gabor'] = gabor_enhanced
-            intermediate_results['denoised'] = denoised
-            processed_img = denoised
-
-        # Save intermediate results if requested
+            # Save intermediate results if requested
         if self.save_intermediates and output_dir and filename:
             self._save_intermediates(intermediate_results, output_dir, filename)
 

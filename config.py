@@ -27,6 +27,14 @@ CLAHE_CLIP_LIMIT = 2.0
 CLAHE_TILE_GRID_SIZE = (8, 8)
 FUNDUS_THRESHOLD = 10
 
+# Adaptive Chaotic Gabor Filter settings
+USE_ADAPTIVE_GABOR = True  # Enable AGF
+GABOR_FREQUENCIES = [0.1, 0.3, 0.5]
+GABOR_ANGLES = [0, 45, 90, 135]
+GABOR_SIGMA = 2.0
+GABOR_GAMMA = 0.5
+GABOR_KERNEL_SIZE = 31
+
 # ================================
 # SEGMENTATION SETTINGS
 # ================================
@@ -53,7 +61,7 @@ CLASSIFICATION_CLASS_NAMES = [
 # ================================
 # TRAINING PARAMETERS
 # ================================
-BATCH_SIZE = 8
+BATCH_SIZE = 4
 LEARNING_RATE = 1e-4
 NUM_EPOCHS = 50
 EARLY_STOPPING_PATIENCE = 10

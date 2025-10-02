@@ -10,6 +10,21 @@ import torchvision.models as models
 from torchvision.models import DenseNet121_Weights, ResNet50_Weights, EfficientNet_B0_Weights
 from config import *
 
+# Try to import paper models
+try:
+    from enhanced_models import (
+        PaperMultiModelDR,
+        ModifiedUNet,
+        OptimizedGRU,
+        MBConvBlock,
+        AdaptiveBatchNorm2d,
+        FocalLoss
+    )
+    PAPER_MODELS_AVAILABLE = True
+except ImportError:
+    print("Warning: paper_models.py not found. Using standard models only.")
+    PAPER_MODELS_AVAILABLE = False
+
 # ================================
 # SEGMENTATION MODELS
 # ================================
@@ -425,9 +440,12 @@ class CombinedLoss(nn.Module):
 # MODEL FACTORY
 # ================================
 
-def create_segmentation_model(model_type="unet", **kwargs):
+def create_segmentation_model(model_type="unet", use_paper_model=PAPER_MODELS_AVAILABLE, **kwargs):
     """Factory function to create segmentation models."""
-    if model_type == "unet":
+    if model_type == "paper_unet" and use_paper_model:
+        from enhanced_models import ModifiedUNet
+        return ModifiedUNet(**kwargs)
+    elif model_type == "unet":
         return UNet(**kwargs)
     elif model_type == "attention_unet":
         return AttentionUNet(**kwargs)
@@ -435,9 +453,12 @@ def create_segmentation_model(model_type="unet", **kwargs):
         raise ValueError(f"Unknown segmentation model type: {model_type}")
 
 
-def create_classification_model(model_type="cnn_lstm", **kwargs):
+def create_classification_model(model_type="cnn_lstm", use_paper_model=False, **kwargs):
     """Factory function to create classification models."""
-    if model_type == "cnn_lstm":
+    if model_type == "enhanced_models" and PAPER_MODELS_AVAILABLE:
+        from enhanced_models import PaperMultiModelDR
+        return PaperMultiModelDR(**kwargs)
+    elif model_type == "cnn_lstm":
         return CNNLSTMClassifier(**kwargs)
     elif model_type == "cnn_only":
         return CNNBackbone(**kwargs)
@@ -445,10 +466,13 @@ def create_classification_model(model_type="cnn_lstm", **kwargs):
         raise ValueError(f"Unknown classification model type: {model_type}")
 
 
-def create_loss_function(loss_type, **kwargs):
+def create_loss_function(loss_type, use_focal=True, **kwargs):
     """Factory function to create loss functions."""
-    if loss_type == "focal":
+    if loss_type == "focal" and PAPER_MODELS_AVAILABLE:
+        from enhanced_models import FocalLoss
         return FocalLoss(**kwargs)
+    # elif loss_type == "focal" and use_focal:
+    #     return FocalLoss(**kwargs)
     elif loss_type == "combined":
         return CombinedLoss(**kwargs)
     elif loss_type == "dice":

@@ -1,8 +1,10 @@
+#!/usr/bin/env python3
 """
 Main pipeline for diabetic retinopathy detection.
 Combines classification and segmentation with advanced features.
 """
 
+import os
 import argparse
 import json
 import torch
@@ -15,10 +17,10 @@ from preprocessing import (
     get_training_transforms, get_validation_transforms, get_segmentation_transforms,
     preprocess_dataset_batch
 )
-from feature_extraction import create_feature_dataset
+from feature_extraction import CombinedFeatureExtractor, create_feature_dataset
 from datasets import (
     ClassificationDataset, SegmentationDataset, DataSplitter,
-    create_data_loaders, analyze_dataset
+    create_data_loaders, create_balanced_loader, analyze_dataset
 )
 from model import create_segmentation_model, create_classification_model
 from training import Trainer, Evaluator, plot_training_history
@@ -44,10 +46,13 @@ def train_classification_model(args):
 
     device = setup_device()
 
+    # Determine model type
+    use_paper_model = args.use_paper_model if hasattr(args, 'use_paper_model') else False
+    use_sango = args.use_sango if hasattr(args, 'use_sango') and use_paper_model else False
+
     # Create dataset
     print("Loading classification dataset...")
 
-    # Use both train and test data for classification
     train_dataset = ClassificationDataset(
         image_dir=args.classification_train_dir or CLASSIFICATION_TRAIN_DIR,
         csv_file=args.classification_train_csv or CLASSIFICATION_TRAIN_CSV,
@@ -65,12 +70,97 @@ def train_classification_model(args):
 
     # Analyze dataset
     analyze_dataset(train_dataset, os.path.join(RESULTS_DIR, "classification_train_analysis.png"))
-    analyze_dataset(test_dataset, os.path.join(RESULTS_DIR, "classification_test_analysis.png"))
 
     # Split dataset
     splitter = DataSplitter()
+
+    if use_paper_model and use_sango:
+        # Use SANGO with paper model
+        print("\n" + "="*60)
+        print("USING PAPER MODEL WITH SANGO OPTIMIZATION")
+        print("="*60)
+
+        try:
+            from train_paper_model import k_fold_cross_validation
+
+            fold_results = k_fold_cross_validation(
+                dataset=train_dataset,
+                device=device,
+                k_folds=args.k_folds if hasattr(args, 'k_folds') else K_FOLDS,
+                use_sango=True
+            )
+            return fold_results
+        except ImportError:
+            print("Error: train_paper_model.py not found. Falling back to standard model.")
+            use_paper_model = False
+
+    if use_paper_model:
+        # Use paper model without SANGO
+        print("Using Paper Model (without SANGO optimization)")
+
+        try:
+            from paper_models import PaperMultiModelDR, FocalLoss
+
+            # Split data
+            train_indices, val_indices, _ = splitter.split_classification_data(
+                train_dataset, test_size=0.0, val_size=0.2
+            )
+
+            loaders = create_data_loaders(train_dataset, train_indices, val_indices)
+            test_loader = torch.utils.data.DataLoader(
+                test_dataset, batch_size=BATCH_SIZE, shuffle=False,
+                num_workers=NUM_WORKERS, pin_memory=True
+            )
+            loaders['test'] = test_loader
+
+            # Create paper model
+            model = PaperMultiModelDR(
+                num_classes=CLASSIFICATION_CLASSES,
+                segmentation_classes=SEGMENTATION_CLASSES
+            )
+
+            # Create trainer with Focal Loss
+            trainer = Trainer(
+                model=model,
+                train_loader=loaders['train'],
+                val_loader=loaders['val'],
+                task_type='classification',
+                device=device,
+                use_wandb=args.use_wandb,
+                experiment_name="paper_model_classification"
+            )
+
+            trainer.setup_training(
+                optimizer_type='adamw',
+                loss_type='focal',
+                scheduler_type='cosine'
+            )
+
+            history, best_model_path = trainer.train(
+                num_epochs=args.epochs or NUM_EPOCHS,
+                save_dir=MODELS_DIR
+            )
+
+            # Evaluate
+            checkpoint = torch.load(best_model_path)
+            model.load_state_dict(checkpoint['model_state_dict'])
+
+            evaluator = Evaluator(model, device)
+            results = evaluator.evaluate_classification(
+                loaders['test'],
+                save_results=True,
+                save_dir=os.path.join(RESULTS_DIR, "paper_model_evaluation")
+            )
+
+            return best_model_path
+
+        except ImportError:
+            print("Error: paper_models.py not found. Falling back to standard model.")
+            use_paper_model = False
+
+    # Standard model training (original code)
     if args.use_cross_validation:
-        print(f"Using {K_FOLDS}-fold cross-validation on training data...")
+        print(f"Using {K_FOLDS}-fold cross-validation...")
         splits = splitter.create_kfold_splits(train_dataset, k=K_FOLDS)
 
         best_models = []
@@ -79,17 +169,14 @@ def train_classification_model(args):
         for fold, (train_indices, val_indices) in enumerate(splits):
             print(f"\nTraining fold {fold + 1}/{K_FOLDS}")
 
-            # Create data loaders
             loaders = create_data_loaders(train_dataset, train_indices, val_indices)
 
-            # Create model
             model = create_classification_model(
                 model_type="cnn_lstm",
                 backbone_name=args.backbone or CLASSIFICATION_BACKBONE,
                 use_attention=not args.no_attention
             )
 
-            # Create trainer
             trainer = Trainer(
                 model=model,
                 train_loader=loaders['train'],
@@ -100,14 +187,12 @@ def train_classification_model(args):
                 experiment_name=f"classification_fold_{fold+1}"
             )
 
-            # Setup training
             trainer.setup_training(
                 optimizer_type=args.optimizer or 'adam',
                 loss_type=args.loss_type or 'focal',
                 scheduler_type=args.scheduler or 'plateau'
             )
 
-            # Train
             history, best_model_path = trainer.train(
                 num_epochs=args.epochs or NUM_EPOCHS,
                 save_dir=MODELS_DIR
@@ -116,30 +201,22 @@ def train_classification_model(args):
             best_models.append(best_model_path)
             fold_histories.append(history)
 
-        # Average results across folds
-        print(f"\nCross-validation completed. Best models: {best_models}")
-
         # Evaluate best model on test set
         if len(best_models) > 0:
             print("\nEvaluating best model on test set...")
-            best_model_path = best_models[0]  # Use first fold's best model
-
-            # Load model
             model = create_classification_model(
                 model_type="cnn_lstm",
                 backbone_name=args.backbone or CLASSIFICATION_BACKBONE,
                 use_attention=not args.no_attention
             )
-            checkpoint = torch.load(best_model_path)
+            checkpoint = torch.load(best_models[0])
             model.load_state_dict(checkpoint['model_state_dict'])
 
-            # Create test loader
             test_loader = torch.utils.data.DataLoader(
                 test_dataset, batch_size=BATCH_SIZE, shuffle=False,
                 num_workers=NUM_WORKERS, pin_memory=True
             )
 
-            # Evaluate
             evaluator = Evaluator(model, device)
             results = evaluator.evaluate_classification(
                 test_loader,
@@ -147,10 +224,16 @@ def train_classification_model(args):
                 save_dir=os.path.join(RESULTS_DIR, "classification_evaluation")
             )
 
+        return best_models
+
     else:
+        # Simple train/val/test split
         print("Using train/validation split...")
+
         # Split training data into train/val
-        train_indices, val_indices, _ = splitter.split_classification_data(train_dataset, test_size=0.0, val_size=0.2)
+        train_indices, val_indices, _ = splitter.split_classification_data(
+            train_dataset, test_size=0.0, val_size=0.2
+        )
 
         # Create data loaders
         loaders = create_data_loaders(train_dataset, train_indices, val_indices)
@@ -194,7 +277,9 @@ def train_classification_model(args):
         )
 
         # Plot training history
-        plot_training_history(history, os.path.join(RESULTS_DIR, "classification_training_history.png"))
+        plot_training_history(history, os.path.join(
+            RESULTS_DIR, "classification_training_history.png"
+        ))
 
         # Evaluate on test set
         print("\nEvaluating on test set...")
@@ -230,7 +315,7 @@ def train_classification_model(args):
 
             explainer.cleanup()
 
-    return best_models if args.use_cross_validation else best_model_path
+        return best_model_path
 
 def train_segmentation_model(args):
     """Train segmentation model for lesion detection."""
@@ -356,6 +441,7 @@ def extract_traditional_features(args):
         import pandas as pd
         from sklearn.ensemble import RandomForestClassifier
         from sklearn.model_selection import cross_val_score
+        from sklearn.metrics import classification_report
 
         # Load labels
         df = pd.read_csv(train_csv)
@@ -610,9 +696,19 @@ def main():
     # Model parameters
     parser.add_argument('--backbone', type=str, choices=['densenet121', 'resnet50', 'efficientnet-b0'],
                        help='Classification backbone architecture')
-    parser.add_argument('--seg-model-type', type=str, choices=['unet', 'attention_unet'],
+    parser.add_argument('--seg-model-type', type=str, choices=['unet', 'attention_unet', 'paper_unet'],
                        help='Segmentation model type')
     parser.add_argument('--no-attention', action='store_true', help='Disable attention mechanism')
+
+    # Paper model options
+    parser.add_argument('--use-paper-model', action='store_true',
+                       help='Use paper implementation (MBConv + Adaptive BN + OGRU)')
+    parser.add_argument('--use-sango', action='store_true',
+                       help='Use SANGO optimization for hyperparameters')
+    parser.add_argument('--use-adaptive-gabor', action='store_true', default=True,
+                       help='Use Adaptive Chaotic Gabor Filter from paper')
+    parser.add_argument('--k-folds', type=int, default=K_FOLDS,
+                       help='Number of folds for cross-validation')
 
     # Training parameters
     parser.add_argument('--epochs', type=int, help='Number of training epochs')

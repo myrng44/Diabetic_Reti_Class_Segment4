@@ -71,15 +71,17 @@ def main():
     print("=" * 60)
 
     print("1. Complete Pipeline (Classification + Segmentation)")
-    print("2. Classification Only")
-    print("3. Segmentation Only")
-    print("4. Preprocess Images Only")
-    print("5. Extract Traditional Features")
-    print("6. Quick Test (5 epochs)")
+    print("2. Classification Only (Standard Model)")
+    print("3. Classification with Paper Model (MBConv + OGRU)")
+    print("4. Classification with Paper Model + SANGO Optimization")
+    print("5. Segmentation Only")
+    print("6. Preprocess Images Only")
+    print("7. Extract Traditional Features")
+    print("8. Quick Test (5 epochs, standard model)")
 
     #choice = input("\nSelect option (1-6): ").strip()
 
-    choice = '3'
+    choice = '1'
 
     # Base command
     base_cmd = [
@@ -106,7 +108,7 @@ def main():
         print("This will train both classification and segmentation models.")
 
     elif choice == '2':
-        # Classification only
+        # Classification only - standard model
         cmd = base_cmd + [
             '--task', 'classification',
             '--epochs', '25',
@@ -114,9 +116,35 @@ def main():
             '--optimizer', 'adam'
         ]
 
-        print("\nRunning classification training...")
+        print("\nRunning classification training (standard model)...")
 
     elif choice == '3':
+        # Classification with paper model
+        cmd = base_cmd + [
+            '--task', 'classification',
+            '--use-paper-model',
+            '--epochs', '30',
+            '--optimizer', 'adamw'
+        ]
+
+        print("\nRunning classification with Paper Model...")
+        print("Using: Modified U-Net + MBConv + Adaptive BN + OGRU")
+
+    elif choice == '4':
+        # Classification with paper model + SANGO
+        cmd = base_cmd + [
+            '--task', 'classification',
+            '--use-paper-model',
+            '--use-sango',
+            '--epochs', '30',
+            '--optimizer', 'adamw'
+        ]
+
+        print("\nRunning classification with Paper Model + SANGO...")
+        print("SANGO will optimize: hidden_dim, dropout, learning_rate")
+        print("This may take longer but achieves best results.")
+
+    elif choice == '5':
         # Segmentation only
         cmd = base_cmd + [
             '--task', 'segmentation',
@@ -126,7 +154,7 @@ def main():
 
         print("\nRunning segmentation training...")
 
-    elif choice == '4':
+    elif choice == '6':
         # Preprocess only
         cmd = base_cmd + [
             '--task', 'preprocess'
@@ -134,7 +162,7 @@ def main():
 
         print("\nPreprocessing images...")
 
-    elif choice == '5':
+    elif choice == '7':
         # Feature extraction
         cmd = base_cmd + [
             '--task', 'features',
@@ -144,13 +172,13 @@ def main():
 
         print("\nExtracting traditional features...")
 
-    elif choice == '6':
+    elif choice == '8':
         # Quick test
         cmd = base_cmd + [
             '--task', 'classification',
             '--epochs', '5',
             '--backbone', 'densenet121',
-            '--batch-size', '4'
+            '--batch-size', '8'
         ]
 
         print("\nRunning quick test (5 epochs)...")
@@ -162,16 +190,16 @@ def main():
     # Ask for additional options
     print("\nAdditional options:")
 
-    use_cv = input("Use cross-validation? (y/n): ").strip().lower() == 'y'
+    use_cv = True #input("Use cross-validation? (y/n): ").strip().lower() == 'y'
     if use_cv:
         cmd.extend(['--use-cross-validation'])
 
-    use_wandb = input("Use Weights & Biases tracking? (y/n): ").strip().lower() == 'y'
+    use_wandb = True #input("Use Weights & Biases tracking? (y/n): ").strip().lower() == 'y'
     if use_wandb:
         cmd.extend(['--use-wandb'])
 
     if choice in ['1', '2']:  # Classification tasks
-        gen_explanations = input("Generate explanations? (y/n): ").strip().lower() == 'y'
+        gen_explanations = True #input("Generate explanations? (y/n): ").strip().lower() == 'y'
         if not gen_explanations:
             cmd.extend(['--no-explanations'])
 
