@@ -29,7 +29,7 @@ def check_requirements():
     required_files = [
         'config.py',
         'sango.py',
-        'adaptive_gabor.py',
+        'adaptive_chaotic_gabor.py',
         'enhanced_models.py',
         'train_enhanced_models.py',
         'datasets.py',
