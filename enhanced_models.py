@@ -441,11 +441,15 @@ def create_paper_model_with_sango(
         # Initialize SANGO
         sango = EnhancedSANGO(
             fitness_function=fitness_function,
-            dim=4,                    # 4 dimensions
-            L_bound=L_bound,
-            U_bound=U_bound,
-            population_size=8,        # Reasonable population
-            max_iterations=20,        # Good exploration
+            dim=4,
+            population_size=10,
+            max_iterations=50,
+            bounds={
+                'hidden_dim1': (128, 512),
+                'hidden_dim2': (64, 256),
+                'dropout': (0.1, 0.5),
+                'lr': (1e-5, 1e-3)
+            },
             verbose=True
         )
 
