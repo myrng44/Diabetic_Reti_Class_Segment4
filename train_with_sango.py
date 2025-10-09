@@ -29,7 +29,7 @@ def check_requirements():
     required_files = [
         'config.py',
         'sango.py',
-        'adaptive_chaotic_gabor.py',
+        'adaptive_gabor.py',
         'enhanced_models.py',
         'train_enhanced_models.py',
         'datasets.py',
@@ -362,7 +362,7 @@ def main():
     elif choice == '2':
         print("\n⚠️  For quick mode, please edit config.py first:")
         print("Set: SANGO_POPULATION_SIZE=6, SANGO_MAX_ITERATIONS=10, NUM_EPOCHS=5")
-        response = input("Have you done this? (y/n): ")
+        response = 'y'
         if response.lower() == 'y':
             train_with_sango_full()
     elif choice == '3':

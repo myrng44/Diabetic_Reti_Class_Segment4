@@ -26,7 +26,7 @@ from enhanced_models import (
     FocalLoss,
     create_paper_model_with_sango
 )
-from adaptive_chaotic_gabor import AdaptiveChaoticGaborFilter
+from adaptive_gabor import AdaptiveChaoticGaborFilter
 from feature_extraction import CombinedFeatureExtractor
 
 # Setup logging
