@@ -1,6 +1,6 @@
 """
-Complete implementation based on paper:
-- Modified U-Net with MBConv + Adaptive BN
+Complete implementation based on paper - FIXED VERSION
+- Modified U-Net with MBConv + Adaptive BN (Fixed channel matching)
 - OGRU with SANGO optimization
 - Multi-fold features (LBP + SURF + TEM)
 """
@@ -105,18 +105,24 @@ class MBConvBlock(nn.Module):
 
 
 # ===================================
-# 2. Modified U-Net with Efficient-Net
+# 2. Modified U-Net with Efficient-Net (FIXED)
 # ===================================
 
 class ModifiedUNet(nn.Module):
     """
     Modified U-Net with MBConv blocks and Adaptive BN.
-    Paper architecture: 9 encoder stages with MBConv.
+    FIXED: Proper channel matching for encoder-decoder
     """
 
     def __init__(self, in_channels=3, out_channels=SEGMENTATION_CLASSES,
-                 features=[32, 48, 64, 96, 128, 160, 192, 224, 256]):
+                 base_features=32, num_stages=5):
         super().__init__()
+
+        # Calculate feature sizes - ensure they're consistent
+        features = [base_features * (2 ** i) for i in range(num_stages)]
+        # features = [32, 64, 128, 256, 512] for base_features=32
+
+        self.num_stages = num_stages
 
         # Encoder (downsampling path)
         self.encoders = nn.ModuleList()
@@ -129,17 +135,36 @@ class ModifiedUNet(nn.Module):
             prev_channels = feature
 
         # Bottleneck
-        self.bottleneck = MBConvBlock(features[-1], features[-1] * 2)
+        bottleneck_channels = features[-1] * 2
+        self.bottleneck = MBConvBlock(features[-1], bottleneck_channels)
+        self.bottleneck_channels = bottleneck_channels
 
         # Decoder (upsampling path)
         self.upconvs = nn.ModuleList()
         self.decoders = nn.ModuleList()
 
-        for feature in reversed(features):
+        # Build decoder in reverse order
+        decoder_in_channels = bottleneck_channels
+        for i in range(num_stages - 1, -1, -1):
+            feature = features[i]
+
+            # Upconv: reduce channels from decoder_in to feature
             self.upconvs.append(
-                nn.ConvTranspose2d(feature * 2, feature, kernel_size=2, stride=2)
+                nn.ConvTranspose2d(
+                    decoder_in_channels,
+                    feature,
+                    kernel_size=2,
+                    stride=2
+                )
             )
-            self.decoders.append(MBConvBlock(feature * 2, feature))
+
+            # Decoder block: feature (from skip) + feature (from upconv) -> feature
+            self.decoders.append(
+                MBConvBlock(feature * 2, feature)
+            )
+
+            # Next decoder input
+            decoder_in_channels = feature
 
         # Final output
         self.final_conv = nn.Conv2d(features[0], out_channels, kernel_size=1)
@@ -167,7 +192,7 @@ class ModifiedUNet(nn.Module):
             skip = skip_connections[idx]
 
             # Handle size mismatch
-            if x.shape != skip.shape:
+            if x.shape[2:] != skip.shape[2:]:
                 x = F.interpolate(x, size=skip.shape[2:], mode='bilinear',
                                   align_corners=False)
 
@@ -227,7 +252,7 @@ class OptimizedGRU(nn.Module):
 
 
 # ===================================
-# 4. Complete Multi-Model Architecture
+# 4. Complete Multi-Model Architecture (FIXED)
 # ===================================
 
 class PaperMultiModelDR(nn.Module):
@@ -238,22 +263,31 @@ class PaperMultiModelDR(nn.Module):
     - DenseNet block
     - Attention mechanism
     - OGRU optimized by SANGO
+
+    FIXED: Dynamic feature calculation based on U-Net output
     """
 
     def __init__(self, num_classes=CLASSIFICATION_CLASSES,
                  segmentation_classes=SEGMENTATION_CLASSES,
-                 gru_hidden_dim=128, gru_num_layers=2,
+                 unet_base_features=32,
+                 unet_num_stages=5,
+                 gru_hidden_dim=128,
+                 gru_num_layers=2,
                  gru_dropout=0.3):
         super().__init__()
 
-        # 1. Modified U-Net
+        # 1. Modified U-Net with configurable base features
         self.unet = ModifiedUNet(
             in_channels=3,
-            out_channels=segmentation_classes
+            out_channels=segmentation_classes,
+            base_features=unet_base_features,
+            num_stages=unet_num_stages
         )
 
-        # Get feature dimension from U-Net bottleneck
-        unet_feature_dim = 256 * 2  # bottleneck output
+        # Calculate U-Net bottleneck feature dimension dynamically
+        # bottleneck_channels = base_features * (2^(num_stages-1)) * 2
+        unet_feature_dim = unet_base_features * (2 ** (unet_num_stages - 1)) * 2
+        self.unet_feature_dim = unet_feature_dim
 
         # 2. DenseNet block (simplified - one dense block)
         self.dense_block = nn.Sequential(
@@ -364,7 +398,7 @@ class FocalLoss(nn.Module):
 
 
 # ===================================
-# 6. Model factory with SANGO optimization
+# 6. Model factory with SANGO optimization (FIXED)
 # ===================================
 
 def create_paper_model_with_sango(
@@ -376,17 +410,7 @@ def create_paper_model_with_sango(
 ):
     """
     Create model with SANGO-optimized hyperparameters.
-
-    Args:
-        train_loader: Training data
-        val_loader: Validation data
-        device: Device
-        use_sango: Whether to use SANGO optimization
-        num_classes: Number of classes
-
-    Returns:
-        model: Optimized model
-        best_params: Best hyperparameters found
+    FIXED: Only optimize GRU hyperparameters, keep U-Net stable
     """
 
     if use_sango:
@@ -394,12 +418,15 @@ def create_paper_model_with_sango(
 
         print("Running SANGO optimization for hyperparameters...")
 
-        # Create fitness function
+        # FIXED: Only optimize GRU parameters, not U-Net architecture
         def model_creator(hidden_dim, num_layers, dropout):
             return PaperMultiModelDR(
                 num_classes=num_classes,
-                gru_hidden_dim=hidden_dim,
-                gru_num_layers=num_layers,
+                segmentation_classes=SEGMENTATION_CLASSES,
+                unet_base_features=32,  # Keep stable
+                unet_num_stages=5,      # Keep stable
+                gru_hidden_dim=int(hidden_dim),
+                gru_num_layers=int(num_layers),
                 gru_dropout=dropout
             )
 
@@ -412,10 +439,10 @@ def create_paper_model_with_sango(
             max_epochs=5  # Quick training for fitness evaluation
         )
 
-        # Run SANGO
+        # Run SANGO - optimize only GRU hyperparameters
         sango = EnhancedSANGO(
             fitness_function=fitness_fn,
-            dim=4,
+            dim=3,  # Only 3 dimensions: hidden_dim, num_layers, dropout
             population_size=8,
             max_iterations=20,
             verbose=True
@@ -424,18 +451,20 @@ def create_paper_model_with_sango(
         best_params, best_fitness, _ = sango.optimize()
 
         print(f"\nSANGO found best parameters:")
-        print(f"  Hidden Dim 1: {best_params['hidden_dim1']}")
-        print(f"  Hidden Dim 2: {best_params['hidden_dim2']}")
-        print(f"  Dropout: {best_params['dropout']:.3f}")
-        print(f"  Learning Rate: {best_params['lr']:.6f}")
+        print(f"  GRU Hidden Dim: {int(best_params.get('hidden_dim', best_params.get('hidden_dim1', 128)))}")
+        print(f"  GRU Num Layers: {int(best_params.get('num_layers', 2))}")
+        print(f"  Dropout: {best_params.get('dropout', 0.3):.3f}")
         print(f"  Best F1-Score: {1 - best_fitness:.4f}")
 
         # Create final model with optimized params
         model = PaperMultiModelDR(
             num_classes=num_classes,
-            gru_hidden_dim=best_params['hidden_dim1'],
-            gru_num_layers=2,
-            gru_dropout=best_params['dropout']
+            segmentation_classes=SEGMENTATION_CLASSES,
+            unet_base_features=32,
+            unet_num_stages=5,
+            gru_hidden_dim=int(best_params.get('hidden_dim', best_params.get('hidden_dim1', 128))),
+            gru_num_layers=int(best_params.get('num_layers', 2)),
+            gru_dropout=best_params.get('dropout', 0.3)
         )
 
         return model, best_params
@@ -443,10 +472,14 @@ def create_paper_model_with_sango(
     else:
         # Use default hyperparameters
         print("Using default hyperparameters (no SANGO optimization)")
-        model = PaperMultiModelDR(num_classes=num_classes)
+        model = PaperMultiModelDR(
+            num_classes=num_classes,
+            unet_base_features=32,
+            unet_num_stages=5
+        )
         default_params = {
-            'hidden_dim1': 128,
-            'hidden_dim2': 128,
+            'hidden_dim': 128,
+            'num_layers': 2,
             'dropout': 0.3,
             'lr': 1e-4
         }
@@ -456,7 +489,13 @@ def create_paper_model_with_sango(
 # Test
 if __name__ == "__main__":
     # Test model creation
-    model = PaperMultiModelDR(num_classes=5, segmentation_classes=3)
+    print("Testing model with default parameters...")
+    model = PaperMultiModelDR(
+        num_classes=5,
+        segmentation_classes=3,
+        unet_base_features=32,
+        unet_num_stages=5
+    )
 
     # Test input
     x = torch.randn(2, 3, 224, 224)
@@ -465,8 +504,12 @@ if __name__ == "__main__":
     cls_out, seg_out = model(x)
 
     print(f"Classification output: {cls_out.shape}")  # (2, 5)
-    print(f"Segmentation output: {seg_out.shape}")  # (2, 3, 224, 224)
+    print(f"Segmentation output: {seg_out.shape}")    # (2, 3, 224, 224)
 
     # Count parameters
     total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Total parameters: {total_params:,}")
+    print(f"Trainable parameters: {trainable_params:,}")
+
+    print("\n✓ Model test passed!")
