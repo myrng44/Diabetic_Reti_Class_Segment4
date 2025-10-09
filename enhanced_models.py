@@ -467,7 +467,8 @@ def create_paper_model_with_sango(
             'hidden_dim1': int(best_params['hidden_dim1']),
             'hidden_dim2': int(best_params['hidden_dim2']),
             'dropout': float(best_params['dropout']),
-            'lr': float(best_params['lr'])
+            'lr': float(best_params['lr']),
+            'f1_score': 1 - best_fitness
         }
 
         print("\n" + "="*70)
