@@ -390,7 +390,7 @@ def create_paper_model_with_sango(
     """
 
     if use_sango:
-        from sango import EnhancedSANGO, create_fitness_function_f1
+        from enhanced_sango import EnhancedSANGO, create_fitness_function_f1
 
         print("Running SANGO optimization for hyperparameters...")
 
