@@ -186,7 +186,7 @@ def train_with_sango_quick():
     logger.info("QUICK TRAINING WITH SANGO (FOR TESTING)")
     logger.info("=" * 80)
 
-    from config import *
+    import config
     from datasets import ClassificationDataset
     from preprocessing import get_training_transforms
     from train_enhanced_models import k_fold_cross_validation
@@ -196,8 +196,8 @@ def train_with_sango_quick():
 
     # Load dataset
     train_dataset = ClassificationDataset(
-        image_dir=CLASSIFICATION_TRAIN_DIR,
-        csv_file=CLASSIFICATION_TRAIN_CSV,
+        image_dir=config.CLASSIFICATION_TRAIN_DIR,
+        csv_file=config.CLASSIFICATION_TRAIN_CSV,
         transform=get_training_transforms()
     )
 
@@ -231,7 +231,7 @@ def train_without_sango():
     logger.info("TRAINING PAPER MODEL (WITHOUT SANGO)")
     logger.info("=" * 80)
 
-    from config import *
+    import config
     from datasets import ClassificationDataset
     from preprocessing import get_training_transforms, get_validation_transforms
     from enhanced_models import PaperMultiModelDR, FocalLoss
@@ -243,26 +243,26 @@ def train_without_sango():
 
     # Load datasets
     train_dataset = ClassificationDataset(
-        image_dir=CLASSIFICATION_TRAIN_DIR,
-        csv_file=CLASSIFICATION_TRAIN_CSV,
+        image_dir=config.CLASSIFICATION_TRAIN_DIR,
+        csv_file=config.CLASSIFICATION_TRAIN_CSV,
         transform=get_training_transforms()
     )
 
     test_dataset = ClassificationDataset(
-        image_dir=CLASSIFICATION_TEST_DIR,
-        csv_file=CLASSIFICATION_TEST_CSV,
+        image_dir=config.CLASSIFICATION_TEST_DIR,
+        csv_file=config.CLASSIFICATION_TEST_CSV,
         transform=get_validation_transforms()
     )
 
     # Create loaders
     train_loader = DataLoader(
-        train_dataset, batch_size=BATCH_SIZE, shuffle=True,
-        num_workers=NUM_WORKERS, pin_memory=True
+        train_dataset, batch_size=config.BATCH_SIZE, shuffle=True,
+        num_workers=config.NUM_WORKERS, pin_memory=True
     )
 
     test_loader = DataLoader(
-        test_dataset, batch_size=BATCH_SIZE, shuffle=False,
-        num_workers=NUM_WORKERS, pin_memory=True
+        test_dataset, batch_size=config.BATCH_SIZE, shuffle=False,
+        num_workers=config.NUM_WORKERS, pin_memory=True
     )
 
     logger.info(f"Train samples: {len(train_dataset)}")
@@ -276,8 +276,8 @@ def train_without_sango():
     logger.info("  - Learning rate: 1e-4")
 
     model = PaperMultiModelDR(
-        num_classes=CLASSIFICATION_CLASSES,
-        segmentation_classes=SEGMENTATION_CLASSES,
+        num_classes=config.CLASSIFICATION_CLASSES,
+        segmentation_classes=config.SEGMENTATION_CLASSES,
         gru_hidden_dim=128,
         gru_num_layers=2,
         gru_dropout=0.3
@@ -299,11 +299,11 @@ def train_without_sango():
         scheduler_type='cosine'
     )
 
-    logger.info(f"\nTraining for {NUM_EPOCHS} epochs...")
+    logger.info(f"\nTraining for {config.NUM_EPOCHS} epochs...")
 
     history, best_model_path = trainer.train(
-        num_epochs=NUM_EPOCHS,
-        save_dir=MODELS_DIR
+        num_epochs=config.NUM_EPOCHS,
+        save_dir=config.MODELS_DIR
     )
 
     # Evaluate
@@ -315,7 +315,7 @@ def train_without_sango():
     results = evaluator.evaluate_classification(
         test_loader,
         save_results=True,
-        save_dir=os.path.join(RESULTS_DIR, "paper_model_no_sango")
+        save_dir=config.os.path.join(config.RESULTS_DIR, "paper_model_no_sango")
     )
 
     logger.info(f"\nTest Results:")
