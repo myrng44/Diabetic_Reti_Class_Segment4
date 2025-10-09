@@ -81,7 +81,7 @@ def train_with_sango_full():
     logger.info("=" * 80)
 
     # Import after checking requirements
-    from config import *
+    import config
     from datasets import ClassificationDataset
     from preprocessing import get_training_transforms, get_validation_transforms
     from train_enhanced_models import k_fold_cross_validation
@@ -95,9 +95,9 @@ def train_with_sango_full():
         logger.info(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
 
     # Create directories
-    os.makedirs(RESULTS_DIR, exist_ok=True)
-    os.makedirs(MODELS_DIR, exist_ok=True)
-    os.makedirs(LOGS_DIR, exist_ok=True)
+    config.os.makedirs(config.RESULTS_DIR, exist_ok=True)
+    config.os.makedirs(config.MODELS_DIR, exist_ok=True)
+    config.os.makedirs(config.LOGS_DIR, exist_ok=True)
 
     # Load dataset
     logger.info("\n" + "-" * 80)
@@ -105,14 +105,14 @@ def train_with_sango_full():
     logger.info("-" * 80)
 
     train_dataset = ClassificationDataset(
-        image_dir=CLASSIFICATION_TRAIN_DIR,
-        csv_file=CLASSIFICATION_TRAIN_CSV,
+        image_dir=config.CLASSIFICATION_TRAIN_DIR,
+        csv_file=config.CLASSIFICATION_TRAIN_CSV,
         transform=get_training_transforms()
     )
 
     logger.info(f"✅ Loaded {len(train_dataset)} training samples")
-    logger.info(f"   Image size: {TARGET_SIZE}x{TARGET_SIZE}")
-    logger.info(f"   Classes: {CLASSIFICATION_CLASSES}")
+    logger.info(f"   Image size: {config.TARGET_SIZE}x{config.TARGET_SIZE}")
+    logger.info(f"   Classes: {config.CLASSIFICATION_CLASSES}")
     logger.info(f"   Preprocessing: CLAHE + Adaptive Chaotic Gabor")
 
     # Show class distribution
@@ -120,8 +120,8 @@ def train_with_sango_full():
     label_counts = Counter(train_dataset.labels)
     logger.info("\nClass distribution:")
     for cls_idx, count in sorted(label_counts.items()):
-        cls_name = CLASSIFICATION_CLASS_NAMES[cls_idx] if cls_idx < len(
-            CLASSIFICATION_CLASS_NAMES) else f"Class {cls_idx}"
+        cls_name = config.CLASSIFICATION_CLASS_NAMES[cls_idx] if cls_idx < len(
+            config.CLASSIFICATION_CLASS_NAMES) else f"Class {cls_idx}"
         percentage = (count / len(train_dataset)) * 100
         logger.info(f"  {cls_name}: {count} ({percentage:.1f}%)")
 
@@ -130,10 +130,10 @@ def train_with_sango_full():
     logger.info("STEP 2: Training with SANGO Optimization")
     logger.info("-" * 80)
     logger.info("This will take 2-4 hours depending on your hardware.")
-    logger.info(f"SANGO will optimize: {list(SANGO_HYPERPARAMS.keys())}")
-    logger.info(f"Population size: {SANGO_POPULATION_SIZE}")
-    logger.info(f"Iterations: {SANGO_MAX_ITERATIONS}")
-    logger.info(f"K-folds: {K_FOLDS}")
+    logger.info(f"SANGO will optimize: {list(config.SANGO_HYPERPARAMS.keys())}")
+    logger.info(f"Population size: {config.SANGO_POPULATION_SIZE}")
+    logger.info(f"Iterations: {config.SANGO_MAX_ITERATIONS}")
+    logger.info(f"K-folds: {config.K_FOLDS}")
 
     # Confirm before starting
     response = input("\n⚠️  This will take several hours. Continue? (y/n): ")
@@ -147,7 +147,7 @@ def train_with_sango_full():
     fold_results = k_fold_cross_validation(
         dataset=train_dataset,
         device=device,
-        k_folds=K_FOLDS,
+        k_folds=config.K_FOLDS,
         use_sango=True
     )
 
@@ -161,7 +161,7 @@ def train_with_sango_full():
     avg_acc = sum(r['accuracy'] for r in fold_results) / len(fold_results)
     std_f1 = (sum((r['f1_score'] - avg_f1) ** 2 for r in fold_results) / len(fold_results)) ** 0.5
 
-    logger.info(f"\nCross-Validation Results ({K_FOLDS} folds):")
+    logger.info(f"\nCross-Validation Results ({config.K_FOLDS} folds):")
     logger.info(f"  Average F1-Score: {avg_f1:.4f} ± {std_f1:.4f}")
     logger.info(f"  Average Accuracy: {avg_acc:.4f}")
 
@@ -169,9 +169,9 @@ def train_with_sango_full():
     for i, result in enumerate(fold_results):
         logger.info(f"  Fold {i + 1}: F1={result['f1_score']:.4f}, Acc={result['accuracy']:.4f}")
 
-    logger.info(f"\n📁 Results saved to: {RESULTS_DIR}")
-    logger.info(f"📁 Models saved to: {MODELS_DIR}")
-    logger.info(f"📁 Logs saved to: {LOGS_DIR}")
+    logger.info(f"\n📁 Results saved to: {config.RESULTS_DIR}")
+    logger.info(f"📁 Models saved to: {config.MODELS_DIR}")
+    logger.info(f"📁 Logs saved to: {config.LOGS_DIR}")
 
     return fold_results
 
