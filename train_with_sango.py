@@ -136,7 +136,7 @@ def train_with_sango_full():
     logger.info(f"K-folds: {config.K_FOLDS}")
 
     # Confirm before starting
-    response = input("\n⚠️  This will take several hours. Continue? (y/n): ")
+    response = 'y'
     if response.lower() != 'y':
         logger.info("Training cancelled by user.")
         return
