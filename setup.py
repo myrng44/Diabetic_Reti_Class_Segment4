@@ -151,7 +151,7 @@ def test_basic_functionality():
 
     try:
         # Test imports
-        from config import *
+        import config
         print("✅ Config import OK")
 
         from preprocessing import FundusPreprocessor
