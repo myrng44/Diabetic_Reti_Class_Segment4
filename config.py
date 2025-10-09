@@ -22,7 +22,7 @@ for dir_path in [RESULTS_DIR, LOGS_DIR, MODELS_DIR]:
 # ================================
 # IMAGE PROCESSING
 # ================================
-TARGET_SIZE = 512
+TARGET_SIZE = 384
 CLAHE_CLIP_LIMIT = 2.0
 CLAHE_TILE_GRID_SIZE = (8, 8)
 FUNDUS_THRESHOLD = 10
@@ -61,7 +61,7 @@ CLASSIFICATION_CLASS_NAMES = [
 # ================================
 # TRAINING PARAMETERS
 # ================================
-BATCH_SIZE = 4
+BATCH_SIZE = 2
 LEARNING_RATE = 1e-4
 NUM_EPOCHS = 50
 EARLY_STOPPING_PATIENCE = 10
@@ -80,8 +80,8 @@ USE_SANGO_OPTIMIZATION = True  # Enable SANGO for hyperparameter search
 SANGO_POPULATION_SIZE = 10
 SANGO_MAX_ITERATIONS = 50
 SANGO_HYPERPARAMS = {
-    'hidden_dim1': (32, 256),
-    'hidden_dim2': (32, 256),
+    'hidden_dim1': (128, 256),
+    'hidden_dim2': (64, 128),
     'dropout': (0.1, 0.5),
     'lr': (1e-5, 1e-3)
 }
