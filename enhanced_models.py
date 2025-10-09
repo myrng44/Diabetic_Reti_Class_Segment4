@@ -460,15 +460,14 @@ def create_paper_model_with_sango(
         print()
 
         # Run optimization
-        best_position, best_fitness, history = sango.optimize()
+        best_params, best_fitness, curve = sango.optimize()
 
         # Parse best parameters
         best_params = {
-            'hidden_dim1': int(best_position[0]),      # DenseNet
-            'hidden_dim2': int(best_position[1]),      # GRU
-            'dropout': float(best_position[2]),
-            'lr': float(best_position[3]),
-            'f1_score': 1 - best_fitness
+            'hidden_dim1': int(best_params['hidden_dim1']),
+            'hidden_dim2': int(best_params['hidden_dim2']),
+            'dropout': float(best_params['dropout']),
+            'lr': float(best_params['lr'])
         }
 
         print("\n" + "="*70)
