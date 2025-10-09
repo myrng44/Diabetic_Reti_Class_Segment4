@@ -157,7 +157,7 @@ def test_basic_functionality():
         from preprocessing import FundusPreprocessor
         print("✅ Preprocessing import OK")
 
-        from models import UNet, CNNLSTMClassifier
+        from model import UNet, CNNLSTMClassifier
         print("✅ Models import OK")
 
         # Test simple model creation

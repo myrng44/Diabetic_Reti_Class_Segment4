@@ -30,8 +30,8 @@ def check_requirements():
         'config.py',
         'sango.py',
         'adaptive_gabor.py',
-        'paper_models.py',
-        'train_paper_model.py',
+        'enhanced_models.py',
+        'train_enhanced_models.py',
         'datasets.py',
         'preprocessing.py'
     ]

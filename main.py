@@ -99,7 +99,7 @@ def train_classification_model(args):
         print("Using Paper Model (without SANGO optimization)")
 
         try:
-            from paper_models import PaperMultiModelDR, FocalLoss
+            from enhanced_models import PaperMultiModelDR, FocalLoss
 
             # Split data
             train_indices, val_indices, _ = splitter.split_classification_data(
