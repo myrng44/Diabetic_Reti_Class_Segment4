@@ -75,6 +75,17 @@ SEGMENTATION_BCE_WEIGHT = 0.5
 CLASSIFICATION_FOCAL_ALPHA = 1.0
 CLASSIFICATION_FOCAL_GAMMA = 2.0
 
+# SANGO Optimization settings
+USE_SANGO_OPTIMIZATION = True  # Enable SANGO for hyperparameter search
+SANGO_POPULATION_SIZE = 10
+SANGO_MAX_ITERATIONS = 50
+SANGO_HYPERPARAMS = {
+    'hidden_dim1': (32, 256),
+    'hidden_dim2': (32, 256),
+    'dropout': (0.1, 0.5),
+    'lr': (1e-5, 1e-3)
+}
+
 # ================================
 # MODEL ARCHITECTURE
 # ================================

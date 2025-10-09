@@ -5,6 +5,7 @@ Setup script to verify installation and data structure for DR detection project.
 
 import os
 import sys
+import subprocess
 import importlib
 from pathlib import Path
 
@@ -150,7 +151,7 @@ def test_basic_functionality():
 
     try:
         # Test imports
-        import config
+        from config import *
         print("✅ Config import OK")
 
         from preprocessing import FundusPreprocessor
