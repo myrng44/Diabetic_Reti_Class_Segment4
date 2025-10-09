@@ -1,14 +1,17 @@
 """
-Complete implementation based on paper - FIXED VERSION
-- Modified U-Net with MBConv + Adaptive BN (Fixed channel matching)
-- OGRU with SANGO optimization
-- Multi-fold features (LBP + SURF + TEM)
+Complete implementation with 4-parameter SANGO optimization
+- hidden_dim1: DenseNet hidden dimension
+- hidden_dim2: GRU hidden dimension
+- dropout: Dropout rate
+- lr: Learning rate
 """
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.optim as optim
 import numpy as np
+from sklearn.metrics import f1_score
 from config import *
 
 
@@ -24,7 +27,7 @@ class SEBlock(nn.Module):
         self.se = nn.Sequential(
             nn.AdaptiveAvgPool2d(1),
             nn.Conv2d(channels, channels // reduction, 1),
-            nn.SiLU(),  # Swish activation
+            nn.SiLU(),
             nn.Conv2d(channels // reduction, channels, 1),
             nn.Sigmoid()
         )
@@ -34,10 +37,7 @@ class SEBlock(nn.Module):
 
 
 class AdaptiveBatchNorm2d(nn.Module):
-    """
-    Adaptive Batch Normalization with embedding features.
-    Based on paper equation (7) and (8).
-    """
+    """Adaptive Batch Normalization with embedding features."""
 
     def __init__(self, num_features, eps=1e-5, momentum=0.1):
         super().__init__()
@@ -45,17 +45,12 @@ class AdaptiveBatchNorm2d(nn.Module):
         self.embedding = nn.Parameter(torch.zeros(1, num_features, 1, 1))
 
     def forward(self, x):
-        # Standard BN
         x_bn = self.bn(x)
-        # Add embedding features for contrastive constraint
         return x_bn + self.embedding
 
 
 class MBConvBlock(nn.Module):
-    """
-    Mobile Inverted Bottleneck Convolution Block.
-    Structure: 1x1 expand -> 3x3 depthwise -> SE -> 1x1 project
-    """
+    """Mobile Inverted Bottleneck Convolution Block."""
 
     def __init__(self, in_channels, out_channels, expand_ratio=6, stride=1,
                  use_se=True, dropout_rate=0.2):
@@ -65,15 +60,13 @@ class MBConvBlock(nn.Module):
 
         layers = []
 
-        # Expansion phase
         if expand_ratio != 1:
             layers.extend([
                 nn.Conv2d(in_channels, hidden_dim, 1, bias=False),
                 AdaptiveBatchNorm2d(hidden_dim),
-                nn.SiLU()  # Swish
+                nn.SiLU()
             ])
 
-        # Depthwise convolution
         layers.extend([
             nn.Conv2d(hidden_dim, hidden_dim, 3, stride=stride,
                       padding=1, groups=hidden_dim, bias=False),
@@ -81,11 +74,9 @@ class MBConvBlock(nn.Module):
             nn.SiLU()
         ])
 
-        # SE block
         if use_se:
             layers.append(SEBlock(hidden_dim))
 
-        # Projection phase
         layers.extend([
             nn.Conv2d(hidden_dim, out_channels, 1, bias=False),
             AdaptiveBatchNorm2d(out_channels)
@@ -105,26 +96,24 @@ class MBConvBlock(nn.Module):
 
 
 # ===================================
-# 2. Modified U-Net with Efficient-Net (FIXED)
+# 2. Modified U-Net (STABLE - No SANGO)
 # ===================================
 
 class ModifiedUNet(nn.Module):
     """
-    Modified U-Net with MBConv blocks and Adaptive BN.
-    FIXED: Proper channel matching for encoder-decoder
+    Modified U-Net with FIXED architecture.
+    This is NOT optimized by SANGO to avoid channel mismatch.
     """
 
     def __init__(self, in_channels=3, out_channels=SEGMENTATION_CLASSES,
                  base_features=32, num_stages=5):
         super().__init__()
 
-        # Calculate feature sizes - ensure they're consistent
+        # Fixed feature progression
         features = [base_features * (2 ** i) for i in range(num_stages)]
-        # features = [32, 64, 128, 256, 512] for base_features=32
-
         self.num_stages = num_stages
 
-        # Encoder (downsampling path)
+        # Encoder
         self.encoders = nn.ModuleList()
         self.pools = nn.ModuleList()
 
@@ -139,41 +128,27 @@ class ModifiedUNet(nn.Module):
         self.bottleneck = MBConvBlock(features[-1], bottleneck_channels)
         self.bottleneck_channels = bottleneck_channels
 
-        # Decoder (upsampling path)
+        # Decoder
         self.upconvs = nn.ModuleList()
         self.decoders = nn.ModuleList()
 
-        # Build decoder in reverse order
         decoder_in_channels = bottleneck_channels
         for i in range(num_stages - 1, -1, -1):
             feature = features[i]
 
-            # Upconv: reduce channels from decoder_in to feature
             self.upconvs.append(
-                nn.ConvTranspose2d(
-                    decoder_in_channels,
-                    feature,
-                    kernel_size=2,
-                    stride=2
-                )
+                nn.ConvTranspose2d(decoder_in_channels, feature,
+                                   kernel_size=2, stride=2)
             )
-
-            # Decoder block: feature (from skip) + feature (from upconv) -> feature
-            self.decoders.append(
-                MBConvBlock(feature * 2, feature)
-            )
-
-            # Next decoder input
+            self.decoders.append(MBConvBlock(feature * 2, feature))
             decoder_in_channels = feature
 
         # Final output
         self.final_conv = nn.Conv2d(features[0], out_channels, kernel_size=1)
-
-        # Global pooling for classification pathway
         self.global_pool = nn.AdaptiveAvgPool2d(1)
 
     def forward(self, x):
-        # Encoder path
+        # Encoder
         skip_connections = []
         for encoder, pool in zip(self.encoders, self.pools):
             x = encoder(x)
@@ -184,14 +159,12 @@ class ModifiedUNet(nn.Module):
         x = self.bottleneck(x)
         bottleneck_features = x
 
-        # Decoder path
+        # Decoder
         skip_connections = skip_connections[::-1]
-
         for idx, (upconv, decoder) in enumerate(zip(self.upconvs, self.decoders)):
             x = upconv(x)
             skip = skip_connections[idx]
 
-            # Handle size mismatch
             if x.shape[2:] != skip.shape[2:]:
                 x = F.interpolate(x, size=skip.shape[2:], mode='bilinear',
                                   align_corners=False)
@@ -199,10 +172,7 @@ class ModifiedUNet(nn.Module):
             x = torch.cat([skip, x], dim=1)
             x = decoder(x)
 
-        # Segmentation output
         seg_output = self.final_conv(x)
-
-        # Feature maps for classification
         pooled_features = self.global_pool(bottleneck_features)
 
         return seg_output, pooled_features
@@ -213,10 +183,7 @@ class ModifiedUNet(nn.Module):
 # ===================================
 
 class OptimizedGRU(nn.Module):
-    """
-    GRU optimized by SANGO algorithm.
-    Hyperparameters (hidden_dim, num_layers) are found by SANGO.
-    """
+    """GRU with SANGO-optimized hidden_dim"""
 
     def __init__(self, input_dim, hidden_dim=128, num_layers=2,
                  dropout=0.3, num_classes=5):
@@ -231,144 +198,113 @@ class OptimizedGRU(nn.Module):
             bidirectional=True
         )
 
-        # Output layer
         self.fc = nn.Linear(hidden_dim * 2, num_classes)
 
     def forward(self, x):
-        # x shape: (batch, features) -> (batch, 1, features) for GRU
         if x.dim() == 2:
             x = x.unsqueeze(1)
 
-        # GRU forward
         gru_out, _ = self.gru(x)
-
-        # Take last output
         last_output = gru_out[:, -1, :]
-
-        # Classification
         output = self.fc(last_output)
 
         return output
 
 
 # ===================================
-# 4. Complete Multi-Model Architecture (FIXED)
+# 4. Complete Architecture with 4 SANGO Parameters
 # ===================================
 
 class PaperMultiModelDR(nn.Module):
     """
-    Complete architecture from paper combining:
-    - Modified U-Net for segmentation + feature extraction
-    - Multi-fold features (LBP, SURF, TEM - extracted separately)
-    - DenseNet block
-    - Attention mechanism
-    - OGRU optimized by SANGO
-
-    FIXED: Dynamic feature calculation based on U-Net output
+    Complete model with 4 SANGO-optimizable parameters:
+    1. densenet_hidden_dim (hidden_dim1) - DenseNet block size
+    2. gru_hidden_dim (hidden_dim2) - GRU hidden size
+    3. dropout - Dropout rate
+    4. (lr is used in optimizer, not model architecture)
     """
 
-    def __init__(self, num_classes=CLASSIFICATION_CLASSES,
+    def __init__(self,
+                 num_classes=CLASSIFICATION_CLASSES,
                  segmentation_classes=SEGMENTATION_CLASSES,
-                 unet_base_features=32,
-                 unet_num_stages=5,
-                 gru_hidden_dim=128,
+                 densenet_hidden_dim=256,  # SANGO param 1
+                 gru_hidden_dim=128,       # SANGO param 2
                  gru_num_layers=2,
-                 gru_dropout=0.3):
+                 gru_dropout=0.3):         # SANGO param 3
         super().__init__()
 
-        # 1. Modified U-Net with configurable base features
+        # 1. U-Net (FIXED - not optimized by SANGO)
         self.unet = ModifiedUNet(
             in_channels=3,
             out_channels=segmentation_classes,
-            base_features=unet_base_features,
-            num_stages=unet_num_stages
+            base_features=32,  # Fixed
+            num_stages=5       # Fixed
         )
 
-        # Calculate U-Net bottleneck feature dimension dynamically
-        # bottleneck_channels = base_features * (2^(num_stages-1)) * 2
-        unet_feature_dim = unet_base_features * (2 ** (unet_num_stages - 1)) * 2
-        self.unet_feature_dim = unet_feature_dim
+        unet_feature_dim = self.unet.bottleneck_channels
 
-        # 2. DenseNet block (simplified - one dense block)
+        # 2. DenseNet block with SANGO-optimized hidden dimension
         self.dense_block = nn.Sequential(
             nn.Linear(unet_feature_dim, 512),
             nn.ReLU(),
             nn.Dropout(0.3),
-            nn.Linear(512, 256),
+            nn.Linear(512, densenet_hidden_dim),  # SANGO optimizes this
             nn.ReLU()
         )
 
-        # 3. Attention mechanism (two FC layers)
+        # 3. Attention mechanism
         self.attention_fc1 = nn.Sequential(
-            nn.Linear(unet_feature_dim, 256),
-            nn.SiLU(),  # Swish
+            nn.Linear(unet_feature_dim, densenet_hidden_dim),
+            nn.SiLU(),
         )
         self.attention_fc2 = nn.Sequential(
-            nn.Linear(256, 256),
+            nn.Linear(densenet_hidden_dim, densenet_hidden_dim),
             nn.Sigmoid()
         )
 
         # 4. Feature fusion
-        # DenseNet output (256) + Attention output (256) = 512
-        fusion_dim = 512
+        fusion_dim = densenet_hidden_dim * 2  # Dense + Attention
 
-        # 5. OGRU (Optimized GRU)
+        # 5. OGRU with SANGO-optimized hidden_dim and dropout
         self.ogru = OptimizedGRU(
             input_dim=fusion_dim,
-            hidden_dim=gru_hidden_dim,
+            hidden_dim=gru_hidden_dim,      # SANGO optimizes this
             num_layers=gru_num_layers,
-            dropout=gru_dropout,
+            dropout=gru_dropout,             # SANGO optimizes this
             num_classes=num_classes
         )
 
     def forward(self, x, external_features=None):
-        """
-        Forward pass.
-
-        Args:
-            x: Input images (batch, 3, H, W)
-            external_features: Optional multi-fold features (LBP+SURF+TEM)
-                              Shape: (batch, feature_dim)
-
-        Returns:
-            classification_output: Class predictions
-            segmentation_output: Segmentation masks
-        """
-        # 1. U-Net forward
+        # U-Net
         seg_output, pooled_features = self.unet(x)
-
-        # Flatten pooled features
         pooled_features = pooled_features.view(pooled_features.size(0), -1)
 
-        # 2. DenseNet pathway
+        # DenseNet pathway
         dense_features = self.dense_block(pooled_features)
 
-        # 3. Attention pathway
+        # Attention pathway
         attention_1 = self.attention_fc1(pooled_features)
         attention_weights = self.attention_fc2(attention_1)
         attention_features = attention_1 * attention_weights
 
-        # 4. Concatenate features
+        # Fusion
         fused_features = torch.cat([dense_features, attention_features], dim=1)
 
-        # Add external features if provided
         if external_features is not None:
             fused_features = torch.cat([fused_features, external_features], dim=1)
 
-        # 5. OGRU classification
+        # Classification
         classification_output = self.ogru(fused_features)
 
         return classification_output, seg_output
 
 
 # ===================================
-# 5. Focal Loss (from paper)
+# 5. Focal Loss
 # ===================================
 
 class FocalLoss(nn.Module):
-    """
-    Focal Loss as defined in paper equation (23).
-    """
+    """Focal Loss for classification"""
 
     def __init__(self, alpha=1.0, gamma=2.0, num_classes=5):
         super().__init__()
@@ -377,28 +313,17 @@ class FocalLoss(nn.Module):
         self.num_classes = num_classes
 
     def forward(self, inputs, targets):
-        """
-        Args:
-            inputs: Raw logits (batch, num_classes)
-            targets: Ground truth labels (batch,)
-        """
-        # Get probabilities
         probs = F.softmax(inputs, dim=1)
-
-        # Get probability of true class
         targets_one_hot = F.one_hot(targets, num_classes=self.num_classes).float()
         pt = (probs * targets_one_hot).sum(dim=1)
-
-        # Focal loss formula
         focal_weight = (1 - pt) ** self.gamma
         ce_loss = F.cross_entropy(inputs, targets, reduction='none')
         focal_loss = self.alpha * focal_weight * ce_loss
-
         return focal_loss.mean()
 
 
 # ===================================
-# 6. Model factory with SANGO optimization (FIXED)
+# 6. SANGO Integration - 4 Parameters
 # ===================================
 
 def create_paper_model_with_sango(
@@ -409,107 +334,203 @@ def create_paper_model_with_sango(
         num_classes=CLASSIFICATION_CLASSES
 ):
     """
-    Create model with SANGO-optimized hyperparameters.
-    FIXED: Only optimize GRU hyperparameters, keep U-Net stable
+    Create model with SANGO optimization for 4 hyperparameters:
+    1. hidden_dim1 (DenseNet): 128-512
+    2. hidden_dim2 (GRU): 64-256
+    3. dropout: 0.1-0.5
+    4. lr: 1e-5 to 1e-3
     """
 
     if use_sango:
-        from enhanced_sango import EnhancedSANGO, create_fitness_function_f1
+        from enhanced_sango import EnhancedSANGO
 
-        print("Running SANGO optimization for hyperparameters...")
+        print("="*70)
+        print("RUNNING SANGO OPTIMIZATION - 4 HYPERPARAMETERS")
+        print("="*70)
+        print("Optimizing:")
+        print("  1. DenseNet Hidden Dim (hidden_dim1): [128, 512]")
+        print("  2. GRU Hidden Dim (hidden_dim2): [64, 256]")
+        print("  3. Dropout: [0.1, 0.5]")
+        print("  4. Learning Rate (lr): [1e-5, 1e-3]")
+        print("="*70)
 
-        # FIXED: Only optimize GRU parameters, not U-Net architecture
-        def model_creator(hidden_dim, num_layers, dropout):
-            return PaperMultiModelDR(
-                num_classes=num_classes,
-                segmentation_classes=SEGMENTATION_CLASSES,
-                unet_base_features=32,  # Keep stable
-                unet_num_stages=5,      # Keep stable
-                gru_hidden_dim=int(hidden_dim),
-                gru_num_layers=int(num_layers),
-                gru_dropout=dropout
-            )
+        # Define bounds for 4 parameters
+        L_bound = np.array([128, 64, 0.1, 1e-5])   # Lower bounds
+        U_bound = np.array([512, 256, 0.5, 1e-3])  # Upper bounds
 
-        fitness_fn = create_fitness_function_f1(
-            model_class=model_creator,
-            train_loader=train_loader,
-            val_loader=val_loader,
-            device=device,
-            num_classes=num_classes,
-            max_epochs=5  # Quick training for fitness evaluation
-        )
+        # Fitness function
+        def fitness_function(params):
+            """
+            Evaluate model with given hyperparameters.
+            params = [densenet_hidden, gru_hidden, dropout, lr]
+            """
+            try:
+                densenet_hidden = int(params[0])
+                gru_hidden = int(params[1])
+                dropout = float(params[2])
+                lr = float(params[3])
 
-        # Run SANGO - optimize only GRU hyperparameters
+                print(f"\nTesting: Dense={densenet_hidden}, GRU={gru_hidden}, "
+                      f"Drop={dropout:.3f}, LR={lr:.6f}")
+
+                # Create model
+                model = PaperMultiModelDR(
+                    num_classes=num_classes,
+                    segmentation_classes=SEGMENTATION_CLASSES,
+                    densenet_hidden_dim=densenet_hidden,
+                    gru_hidden_dim=gru_hidden,
+                    gru_num_layers=2,
+                    gru_dropout=dropout
+                ).to(device)
+
+                # Setup training
+                criterion_cls = FocalLoss(num_classes=num_classes)
+                criterion_seg = nn.BCEWithLogitsLoss()
+                optimizer = optim.Adam(model.parameters(), lr=lr)
+
+                # Quick training (3 epochs for evaluation)
+                model.train()
+                for epoch in range(3):
+                    epoch_loss = 0
+                    for images, labels, masks, _ in train_loader:
+                        images = images.to(device)
+                        labels = labels.to(device)
+                        masks = masks.to(device)
+
+                        optimizer.zero_grad()
+                        cls_out, seg_out = model(images)
+
+                        loss_cls = criterion_cls(cls_out, labels)
+                        loss_seg = criterion_seg(seg_out, masks)
+                        loss = loss_cls + 0.5 * loss_seg
+
+                        loss.backward()
+                        optimizer.step()
+                        epoch_loss += loss.item()
+
+                # Validation
+                model.eval()
+                all_preds = []
+                all_labels = []
+
+                with torch.no_grad():
+                    for images, labels, masks, _ in val_loader:
+                        images = images.to(device)
+                        cls_out, _ = model(images)
+                        preds = torch.argmax(cls_out, dim=1)
+
+                        all_preds.extend(preds.cpu().numpy())
+                        all_labels.extend(labels.numpy())
+
+                # Calculate F1 score
+                f1 = f1_score(all_labels, all_preds, average='weighted')
+                fitness = 1 - f1  # Minimize
+
+                print(f"  → F1: {f1:.4f}, Fitness: {fitness:.4f}")
+
+                # Cleanup
+                del model
+                torch.cuda.empty_cache()
+
+                return fitness
+
+            except Exception as e:
+                print(f"  → Error: {e}")
+                return 1.0  # Worst fitness
+
+        # Initialize SANGO
         sango = EnhancedSANGO(
-            fitness_function=fitness_fn,
-            dim=3,  # Only 3 dimensions: hidden_dim, num_layers, dropout
-            population_size=8,
-            max_iterations=20,
+            fitness_function=fitness_function,
+            dim=4,                    # 4 dimensions
+            L_bound=L_bound,
+            U_bound=U_bound,
+            population_size=8,        # Reasonable population
+            max_iterations=20,        # Good exploration
             verbose=True
         )
 
-        best_params, best_fitness, _ = sango.optimize()
+        print(f"\nSANGO Configuration:")
+        print(f"  Population Size: {sango.N}")
+        print(f"  Max Iterations: {sango.T}")
+        print(f"  Total Evaluations: {sango.N * sango.T}")
+        print()
 
-        print(f"\nSANGO found best parameters:")
-        print(f"  GRU Hidden Dim: {int(best_params.get('hidden_dim', best_params.get('hidden_dim1', 128)))}")
-        print(f"  GRU Num Layers: {int(best_params.get('num_layers', 2))}")
-        print(f"  Dropout: {best_params.get('dropout', 0.3):.3f}")
-        print(f"  Best F1-Score: {1 - best_fitness:.4f}")
+        # Run optimization
+        best_position, best_fitness, history = sango.optimize()
 
-        # Create final model with optimized params
+        # Parse best parameters
+        best_params = {
+            'hidden_dim1': int(best_position[0]),      # DenseNet
+            'hidden_dim2': int(best_position[1]),      # GRU
+            'dropout': float(best_position[2]),
+            'lr': float(best_position[3]),
+            'f1_score': 1 - best_fitness
+        }
+
+        print("\n" + "="*70)
+        print("SANGO OPTIMIZATION COMPLETE!")
+        print("="*70)
+        print(f"Best Parameters Found:")
+        print(f"  DenseNet Hidden Dim: {best_params['hidden_dim1']}")
+        print(f"  GRU Hidden Dim: {best_params['hidden_dim2']}")
+        print(f"  Dropout: {best_params['dropout']:.3f}")
+        print(f"  Learning Rate: {best_params['lr']:.6f}")
+        print(f"  Best F1-Score: {best_params['f1_score']:.4f}")
+        print("="*70 + "\n")
+
+        # Create final model with best parameters
         model = PaperMultiModelDR(
             num_classes=num_classes,
             segmentation_classes=SEGMENTATION_CLASSES,
-            unet_base_features=32,
-            unet_num_stages=5,
-            gru_hidden_dim=int(best_params.get('hidden_dim', best_params.get('hidden_dim1', 128))),
-            gru_num_layers=int(best_params.get('num_layers', 2)),
-            gru_dropout=best_params.get('dropout', 0.3)
+            densenet_hidden_dim=best_params['hidden_dim1'],
+            gru_hidden_dim=best_params['hidden_dim2'],
+            gru_num_layers=2,
+            gru_dropout=best_params['dropout']
         )
 
         return model, best_params
 
     else:
-        # Use default hyperparameters
+        # No SANGO - use default parameters
         print("Using default hyperparameters (no SANGO optimization)")
+
         model = PaperMultiModelDR(
             num_classes=num_classes,
-            unet_base_features=32,
-            unet_num_stages=5
+            segmentation_classes=SEGMENTATION_CLASSES,
+            densenet_hidden_dim=256,
+            gru_hidden_dim=128,
+            gru_num_layers=2,
+            gru_dropout=0.3
         )
+
         default_params = {
-            'hidden_dim': 128,
-            'num_layers': 2,
+            'hidden_dim1': 256,
+            'hidden_dim2': 128,
             'dropout': 0.3,
             'lr': 1e-4
         }
+
         return model, default_params
 
 
+# ===================================
 # Test
+# ===================================
+
 if __name__ == "__main__":
-    # Test model creation
-    print("Testing model with default parameters...")
+    print("Testing PaperMultiModelDR with 4 SANGO parameters...")
+
     model = PaperMultiModelDR(
         num_classes=5,
         segmentation_classes=3,
-        unet_base_features=32,
-        unet_num_stages=5
+        densenet_hidden_dim=256,
+        gru_hidden_dim=128,
+        gru_dropout=0.3
     )
 
-    # Test input
     x = torch.randn(2, 3, 224, 224)
-
-    # Forward pass
     cls_out, seg_out = model(x)
 
-    print(f"Classification output: {cls_out.shape}")  # (2, 5)
-    print(f"Segmentation output: {seg_out.shape}")    # (2, 3, 224, 224)
-
-    # Count parameters
-    total_params = sum(p.numel() for p in model.parameters())
-    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"Total parameters: {total_params:,}")
-    print(f"Trainable parameters: {trainable_params:,}")
-
-    print("\n✓ Model test passed!")
+    print(f"✓ Classification output: {cls_out.shape}")
+    print(f"✓ Segmentation output: {seg_out.shape}")
+    print(f"✓ Total parameters: {sum(p.numel() for p in model.parameters()):,}")
