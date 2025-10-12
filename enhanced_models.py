@@ -341,12 +341,13 @@ def create_paper_model_with_sango(
     if use_sango:
         # Import here to check if available
         try:
-            from enhanced_sango import EnhancedSANGO as SANGO  # Try original SANGO first
-            print("Using original SANGO")
+            from enhanced_sango import EnhancedSANGO
+            SANGO_class = EnhancedSANGO
+            print("Using EnhancedSANGO")
         except ImportError:
             try:
                 from sango import SANGO as SANGO
-                print("Using EnhancedSANGO")
+                print("Using original SANGO")
             except ImportError:
                 print("ERROR: No SANGO implementation found!")
                 print("Creating model with default parameters instead...")
@@ -487,13 +488,17 @@ def create_paper_model_with_sango(
 
         # Initialize SANGO
         try:
-            sango = SANGO(
-                fitness_func=fitness_function,
-                lb=np.array([128, 64, 0.1, 1e-5]),
-                ub=np.array([512, 256, 0.5, 1e-3]),
+            sango = SANGO_class(
+                fitness_function=fitness_function,
                 dim=4,
-                pop_size=10,
-                max_iter=50
+                population_size=10,
+                max_iterations=50,
+                bounds={
+                    'hidden_dim1': (64, 256),  # GRU layer 1
+                    'hidden_dim2': (64, 256),  # GRU layer 2
+                    'dropout': (0.1, 0.5),  # Dropout rate
+                    'lr': (1e-5, 1e-3)
+                }  # ✓ Hỗ trợ cả 2 format
             )
 
             print(f"\nSANGO Configuration:")
