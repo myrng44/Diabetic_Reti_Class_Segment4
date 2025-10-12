@@ -657,6 +657,7 @@ def optimize_gru_hyperparameters(
         Fitness function for SANGO.
         Lower is better (validation loss).
         """
+        print(f"🔸 Evaluating params: {hyperparams}")
         hidden_dim = int(hyperparams[0])
         num_layers = int(hyperparams[1])
 
