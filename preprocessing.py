@@ -54,7 +54,8 @@ class FundusPreprocessor:
         """Enhanced augmentation pipeline with more transformations."""
         return A.Compose([
             A.RandomRotate90(p=0.5),
-            A.Flip(p=0.5),
+            A.HorizontalFlip(p=0.5),
+            A.VerticalFlip(p=0.5),
             A.ShiftScaleRotate(
                 shift_limit=0.1,
                 scale_limit=0.2,
