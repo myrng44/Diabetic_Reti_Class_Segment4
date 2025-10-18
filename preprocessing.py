@@ -70,19 +70,15 @@ class FundusPreprocessor:
                 A.RandomGamma(gamma_limit=(80, 120)),
             ], p=0.5),
             A.OneOf([
-                A.GaussNoise(mean=0, per_channel=True, var_limit=0.1),
+                A.GaussNoise(always_apply=False, p=0.5),
                 A.ISONoise(),
                 A.MultiplicativeNoise(),
             ], p=0.2),
-            A.CoarseDropout(
-                max_holes=8,
-                max_height=32,
-                max_width=32,
-                min_holes=5,
-                min_height=8,
-                min_width=8,
-                fill_value=0,
-                mask_fill_value=0,
+            A.GridDropout(
+                ratio=0.2,
+                unit_size_min=32,
+                unit_size_max=64,
+                random_offset=True,
                 p=0.2
             ),
             A.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),

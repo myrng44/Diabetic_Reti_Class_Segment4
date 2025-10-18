@@ -61,30 +61,25 @@ CLASSIFICATION_CLASS_NAMES = [
 # ================================
 # TRAINING PARAMETERS
 # ================================
-BATCH_SIZE = 8  # Increased from 8
-LEARNING_RATE = 5e-5  # Decreased from 1e-4
-NUM_EPOCHS = 50  # Increased from 50
-EARLY_STOPPING_PATIENCE = 10  # Increased from 10
-WEIGHT_DECAY = 1e-4  # Increased from 1e-5
+BATCH_SIZE = 4  # Reduced from 8 to prevent OOM
+LEARNING_RATE = 1e-4
+NUM_EPOCHS = 50
+EARLY_STOPPING_PATIENCE = 10
+WEIGHT_DECAY = 1e-5
 
 # Cross validation
-K_FOLDS = 3
+K_FOLDS = 2  # Reduced for testing
+NUM_WORKERS = 2  # Reduced to prevent memory issues
 
 # Loss weights
-SEGMENTATION_BCE_WEIGHT = 0.4  # Decreased to give more weight to classification
-CLASSIFICATION_FOCAL_ALPHA = 2.0  # Increased from 1.0
-CLASSIFICATION_FOCAL_GAMMA = 2.5  # Increased from 2.0
+SEGMENTATION_BCE_WEIGHT = 0.5
+CLASSIFICATION_FOCAL_ALPHA = 1.0
+CLASSIFICATION_FOCAL_GAMMA = 2.0
 
-# SANGO Optimization settings
-USE_SANGO_OPTIMIZATION = True  # Enable SANGO for hyperparameter search
-SANGO_POPULATION_SIZE = 10
-SANGO_MAX_ITERATIONS = 50
-SANGO_HYPERPARAMS = {
-    'hidden_dim1': (128, 256),
-    'hidden_dim2': (64, 128),
-    'dropout': (0.1, 0.5),
-    'lr': (1e-5, 1e-3)
-}
+# Memory management
+GRAD_CLIP = 1.0
+PIN_MEMORY = True
+EMPTY_CACHE_FREQ = 1  # Empty CUDA cache every N batches
 
 # ================================
 # MODEL ARCHITECTURE

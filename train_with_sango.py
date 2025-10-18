@@ -278,9 +278,9 @@ class Trainer:
 
 def k_fold_cross_validation(dataset, device, k_folds=K_FOLDS, use_sango=True):
     """K-fold cross validation with optional SANGO optimization"""
-    print(f"\n{'=' * 70}")
-    print(f"K-FOLD CROSS VALIDATION (K={k_folds})")
-    print(f"{'=' * 70}\n")
+    # Clear CUDA cache at start
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
     # Get labels for stratified split
     labels = dataset.labels if hasattr(dataset, 'labels') else [0] * len(dataset)
@@ -294,9 +294,8 @@ def k_fold_cross_validation(dataset, device, k_folds=K_FOLDS, use_sango=True):
         print(f"\n{'=' * 70}")
         print(f"FOLD {fold}/{k_folds}")
         print(f"{'=' * 70}")
-        print(f"Train samples: {len(train_idx)}, Val samples: {len(val_idx)}")
 
-        # Create data loaders
+        # Create data loaders with memory management
         train_subset = Subset(dataset, train_idx)
         val_subset = Subset(dataset, val_idx)
 
@@ -305,52 +304,47 @@ def k_fold_cross_validation(dataset, device, k_folds=K_FOLDS, use_sango=True):
             batch_size=BATCH_SIZE,
             shuffle=True,
             num_workers=NUM_WORKERS,
-            pin_memory=True
+            pin_memory=PIN_MEMORY,
+            drop_last=True  # Prevent small batches
         )
-
         val_loader = DataLoader(
             val_subset,
             batch_size=BATCH_SIZE,
             shuffle=False,
             num_workers=NUM_WORKERS,
-            pin_memory=True
+            pin_memory=PIN_MEMORY
         )
+
+        print(f"Train samples: {len(train_subset)}, Val samples: {len(val_subset)}")
 
         # Run SANGO only on first fold
         if fold == 1 and use_sango:
             print("\n🔍 Running SANGO optimization (only on first fold)...")
             try:
                 from enhanced_sango import EnhancedSANGO
-                sango = EnhancedSANGO(
-                    param_ranges={
-                        'hidden_dim1': (128, 512),
-                        'hidden_dim2': (64, 256),
-                        'dropout': (0.1, 0.5),
-                        'lr': (1e-5, 1e-3)
-                    },
-                    population_size=15,
-                    max_iterations=80
-                )
 
-                def fitness_function(params):
+                def fitness_function(x):
                     try:
+                        # Clear cache before model creation
+                        torch.cuda.empty_cache()
+
                         model = create_paper_model_with_sango(
-                            hidden_dim1=int(params['hidden_dim1']),
-                            hidden_dim2=int(params['hidden_dim2']),
-                            dropout=float(params['dropout']),
-                            lr=float(params['lr'])
+                            hidden_dim1=int(x[0]),
+                            hidden_dim2=int(x[1]),
+                            dropout=float(x[2]),
+                            lr=float(x[3])
                         ).to(device)
 
                         trainer = Trainer(model, train_loader, val_loader, device)
-                        trainer.setup_training(learning_rate=float(params['lr']))
+                        trainer.setup_training(learning_rate=float(x[3]))
 
-                        # Quick evaluation (3 epochs)
-                        for _ in range(3):
+                        # Quick evaluation (2 epochs)
+                        for _ in range(2):
                             trainer.train_epoch()
                         metrics = trainer.validate_epoch()
 
                         # Clean up
-                        del model
+                        del model, trainer
                         torch.cuda.empty_cache()
 
                         return -metrics['f1_score']  # Negative because SANGO minimizes
@@ -358,7 +352,21 @@ def k_fold_cross_validation(dataset, device, k_folds=K_FOLDS, use_sango=True):
                         print(f"Error in fitness function: {str(e)}")
                         return float('inf')
 
-                best_params = sango.optimize(fitness_function)
+                # Initialize SANGO with correct parameters
+                sango = EnhancedSANGO(
+                    fitness_function=fitness_function,
+                    dim=4,  # 4 parameters to optimize
+                    bounds=[[128, 512], [64, 256], [0.1, 0.5], [1e-5, 1e-3]]  # Parameter ranges
+                )
+
+                best_pos = sango.run()
+                best_params = {
+                    'hidden_dim1': int(best_pos[0]),
+                    'hidden_dim2': int(best_pos[1]),
+                    'dropout': float(best_pos[2]),
+                    'lr': float(best_pos[3])
+                }
+
                 print("\nBest parameters found by SANGO:")
                 for param, value in best_params.items():
                     print(f"  {param}: {value}")
@@ -388,7 +396,7 @@ def k_fold_cross_validation(dataset, device, k_folds=K_FOLDS, use_sango=True):
         trainer.setup_training(learning_rate=learning_rate)
 
         try:
-            # Train
+            # Train with memory management
             print(f"\n🚀 Training Fold {fold}...")
             history = trainer.train(num_epochs=NUM_EPOCHS)
 
@@ -409,10 +417,10 @@ def k_fold_cross_validation(dataset, device, k_folds=K_FOLDS, use_sango=True):
         except Exception as e:
             print(f"\nError during training: {str(e)}")
             continue
-
-        # Cleanup
-        del model, trainer
-        torch.cuda.empty_cache()
+        finally:
+            # Always cleanup
+            del model, trainer
+            torch.cuda.empty_cache()
 
     # Print summary
     if fold_results:
