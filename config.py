@@ -4,16 +4,29 @@ Contains all hyperparameters, paths, and constants.
 """
 
 import os
+import torch
 
 # ================================
 # GENERAL SETTINGS
 # ================================
 SEED = 42
-DEVICE = "cuda" if True else "cpu"  # Will be set dynamically in main
-NUM_WORKERS = 4
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"  # Properly check GPU availability
+NUM_WORKERS = 2  # Reduced to prevent GPU memory contention
 RESULTS_DIR = "results"
 LOGS_DIR = "logs"
 MODELS_DIR = "models"
+
+# GPU settings
+BATCH_SIZE = 4  # Reduced for better GPU memory utilization
+MIXED_PRECISION = True
+EMPTY_CACHE_FREQ = 1
+GRADIENT_ACCUMULATION_STEPS = 2
+PIN_MEMORY = True
+
+# Training optimization
+USE_AMP = True  # Enable automatic mixed precision
+CUDNN_BENCHMARK = True  # Enable cuDNN benchmarking
+CUDNN_DETERMINISTIC = False  # Disable for better performance
 
 # Create directories
 for dir_path in [RESULTS_DIR, LOGS_DIR, MODELS_DIR]:
@@ -61,7 +74,6 @@ CLASSIFICATION_CLASS_NAMES = [
 # ================================
 # TRAINING PARAMETERS
 # ================================
-BATCH_SIZE = 4  # Reduced from default to prevent CUDA OOM
 NUM_EPOCHS = 50
 LEARNING_RATE = 1e-4
 WEIGHT_DECAY = 1e-5

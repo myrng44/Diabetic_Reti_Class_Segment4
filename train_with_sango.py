@@ -9,24 +9,50 @@ import torch.optim as optim
 from torch.utils.data import DataLoader, Subset
 from sklearn.model_selection import StratifiedKFold
 import numpy as np
+import math
 from tqdm import tqdm
 import os
 from config import *
 from enhanced_models import PaperMultiModelDR, FocalLoss, create_paper_model_with_sango
 from datasets import SegmentationDataset, ClassificationDataset
+from contextlib import nullcontext
+
+
+def setup_gpu():
+    """Setup GPU environment for optimal performance"""
+    if torch.cuda.is_available():
+        # Enable cuDNN auto-tuner
+        torch.backends.cudnn.benchmark = CUDNN_BENCHMARK
+        torch.backends.cudnn.deterministic = CUDNN_DETERMINISTIC
+
+        # Set device
+        torch.cuda.set_device(0)  # Use first GPU
+        torch.cuda.empty_cache()  # Clear cache
+
+        print(f"Using GPU: {torch.cuda.get_device_name(0)}")
+        print(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1024 ** 3:.1f}GB")
+    else:
+        print("No GPU available, using CPU")
 
 
 class Trainer:
     """Training class for enhanced models - FIXED VERSION"""
 
     def __init__(self, model, train_loader, val_loader, device, task_type='classification'):
+        setup_gpu()  # Setup GPU environment
+
         self.model = model.to(device)
+        if torch.cuda.device_count() > 1:
+            print(f"Using {torch.cuda.device_count()} GPUs!")
+            self.model = nn.DataParallel(self.model)
+
         self.train_loader = train_loader
         self.val_loader = val_loader
         self.device = device
         self.task_type = task_type
-        # Fix for GradScaler deprecation warning
-        self.scaler = torch.amp.GradScaler('cuda') if MIXED_PRECISION else None
+
+        # Use new autocast API
+        self.scaler = torch.amp.GradScaler() if MIXED_PRECISION else None
 
         # Loss functions
         self.criterion_cls = FocalLoss(num_classes=CLASSIFICATION_CLASSES)
@@ -126,8 +152,8 @@ class Trainer:
             # Process full batch at once instead of splitting
             self.optimizer.zero_grad()
 
-            # Mixed precision training
-            with torch.cuda.amp.autocast(enabled=MIXED_PRECISION):
+            # Mixed precision training using new API
+            with torch.amp.autocast(device_type='cuda', dtype=torch.float16, enabled=MIXED_PRECISION):
                 cls_out, seg_out = self.model(images)
 
                 # Calculate losses
@@ -337,32 +363,60 @@ def k_fold_cross_validation(dataset, device, k_folds=K_FOLDS, use_sango=True):
                 from enhanced_sango import EnhancedSANGO
 
                 def fitness_function(x):
+                    """Enhanced fitness function with better error handling"""
                     try:
+                        # Convert parameters properly
+                        params = {
+                            'hidden_dim1': int(max(32, min(512, x[0]))),  # Clip to valid range
+                            'hidden_dim2': int(max(32, min(256, x[1]))),
+                            'dropout': float(max(0.1, min(0.5, x[2]))),
+                            'lr': float(max(1e-5, min(1e-3, x[3])))
+                        }
+
                         # Clear cache before model creation
                         torch.cuda.empty_cache()
 
-                        model = create_paper_model_with_sango(
-                            hidden_dim1=int(x[0]),
-                            hidden_dim2=int(x[1]),
-                            dropout=float(x[2]),
-                            lr=float(x[3])
-                        ).to(device)
+                        # Create and move model to device
+                        model = create_paper_model_with_sango(**params)
+                        if model is None:
+                            return float('inf')
 
-                        trainer = Trainer(model, train_loader, val_loader, device)
-                        trainer.setup_training(learning_rate=float(x[3]))
+                        model = model.to(device)
 
-                        # Quick evaluation (2 epochs)
-                        for _ in range(2):
-                            trainer.train_epoch()
-                        metrics = trainer.validate_epoch()
+                        # Setup trainer with error catching
+                        try:
+                            trainer = Trainer(model, train_loader, val_loader, device)
+                            trainer.setup_training(learning_rate=params['lr'])
 
-                        # Clean up
-                        del model, trainer
-                        torch.cuda.empty_cache()
+                            # Quick evaluation (2 epochs)
+                            for _ in range(2):
+                                metrics = trainer.train_epoch()
+                                if not metrics or math.isnan(metrics['loss']):
+                                    raise ValueError("Training produced NaN loss")
 
-                        return -metrics['f1_score']  # Negative because SANGO minimizes
+                            val_metrics = trainer.validate_epoch()
+                            if not val_metrics or math.isnan(val_metrics['f1_score']):
+                                raise ValueError("Validation produced NaN F1-score")
+
+                            f1_score = float(val_metrics['f1_score'])
+
+                            # Clean up
+                            del model, trainer
+                            torch.cuda.empty_cache()
+
+                            # Return negative F1-score (SANGO minimizes)
+                            return -max(0.0, min(1.0, f1_score))  # Clip to valid range
+
+                        except Exception as e:
+                            print(f"Error in fitness evaluation: {e}")
+                            # Clean up on error
+                            del model
+                            torch.cuda.empty_cache()
+                            return float('inf')
+
                     except Exception as e:
-                        print(f"Error in fitness function: {str(e)}")
+                        print(f"Error in fitness function: {e}")
+                        torch.cuda.empty_cache()
                         return float('inf')
 
                 # Initialize SANGO with correct parameters
