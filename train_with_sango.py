@@ -25,7 +25,8 @@ class Trainer:
         self.val_loader = val_loader
         self.device = device
         self.task_type = task_type
-        self.scaler = torch.cuda.amp.GradScaler() if MIXED_PRECISION else None
+        # Fix for GradScaler deprecation warning
+        self.scaler = torch.amp.GradScaler('cuda') if MIXED_PRECISION else None
 
         # Loss functions
         self.criterion_cls = FocalLoss(num_classes=CLASSIFICATION_CLASSES)
@@ -122,46 +123,33 @@ class Trainer:
             labels = labels.to(self.device)
             masks = masks.to(self.device)
 
-            # Split batch for gradient accumulation
-            split_size = images.shape[0] // GRADIENT_ACCUMULATION_STEPS
+            # Process full batch at once instead of splitting
+            self.optimizer.zero_grad()
 
-            for i in range(GRADIENT_ACCUMULATION_STEPS):
-                start_idx = i * split_size
-                end_idx = (i + 1) * split_size if i < GRADIENT_ACCUMULATION_STEPS - 1 else images.shape[0]
-
-                img_split = images[start_idx:end_idx]
-                label_split = labels[start_idx:end_idx]
-
-                # Forward pass
-                self.optimizer.zero_grad()
-                cls_out, seg_out = self.model(img_split)
+            # Mixed precision training
+            with torch.cuda.amp.autocast(enabled=MIXED_PRECISION):
+                cls_out, seg_out = self.model(images)
 
                 # Calculate losses
-                loss_cls = self.criterion_cls(cls_out, label_split)
+                loss_cls = self.criterion_cls(cls_out, labels)
                 loss_seg = self.criterion_seg(seg_out, masks)
 
                 # Combined loss
                 loss = loss_cls + SEGMENTATION_BCE_WEIGHT * loss_seg
-                loss = loss / GRADIENT_ACCUMULATION_STEPS
 
-                if self.scaler is not None:
-                    self.scaler.scale(loss).backward()
-                else:
-                    loss.backward()
-
-                # Track losses
-                total_loss += loss.item()
-                total_cls_loss += loss_cls.item()
-                total_seg_loss += loss_seg.item()
-
-            # Update weights
             if self.scaler is not None:
+                self.scaler.scale(loss).backward()
                 self.scaler.step(self.optimizer)
                 self.scaler.update()
             else:
+                loss.backward()
                 self.optimizer.step()
 
-            self.optimizer.zero_grad()
+            # Track losses
+            total_loss += loss.item()
+            total_cls_loss += loss_cls.item()
+            total_seg_loss += loss_seg.item()
+
 
             # Update progress bar
             pbar.set_postfix({

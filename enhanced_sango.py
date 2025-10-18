@@ -31,7 +31,7 @@ class EnhancedSANGO:
             dim: int = 4,
             population_size: int = 10,
             max_iterations: int = 50,
-            bounds: Dict[str, Tuple[float, float]] = None,
+            bounds: List[List[float]] = None,
             learning_rate: float = 0.02,
             prey_capture_df: float = 0.4,
             prey_identification_r: float = 0.02,
@@ -39,12 +39,12 @@ class EnhancedSANGO:
     ):
         # Default bounds if none provided
         if bounds is None:
-            bounds = {
-                'hidden_dim1': (32, 256),
-                'hidden_dim2': (32, 256),
-                'dropout': (0.1, 0.5),
-                'lr': (1e-5, 1e-3)
-            }
+            bounds = [
+                [128, 512],  # hidden_dim1
+                [64, 256],   # hidden_dim2
+                [0.1, 0.5],  # dropout
+                [1e-5, 1e-3] # learning rate
+            ]
 
         self.fitness_function = fitness_function
         self.dim = dim
@@ -57,14 +57,13 @@ class EnhancedSANGO:
 
         # Setup bounds
         self.bounds = bounds
-        self.param_names = list(bounds.keys())
-        self.L_bound = np.array([bounds[k][0] for k in self.param_names], dtype=float)
-        self.U_bound = np.array([bounds[k][1] for k in self.param_names], dtype=float)
+        self.param_names = ['hidden_dim1', 'hidden_dim2', 'dropout', 'lr']
+        self.L_bound = np.array([b[0] for b in bounds], dtype=float)
+        self.U_bound = np.array([b[1] for b in bounds], dtype=float)
 
         # Track which params are discrete (int) vs continuous (float)
         self.discrete_params = ['hidden_dim1', 'hidden_dim2']
-        self.discrete_indices = [i for i, name in enumerate(self.param_names)
-                                 if name in self.discrete_params]
+        self.discrete_indices = [0, 1]  # indices of discrete parameters
 
         # Initialize
         self.population = None
