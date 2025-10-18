@@ -70,14 +70,12 @@ class FundusPreprocessor:
                 A.RandomGamma(gamma_limit=(80, 120)),
             ], p=0.5),
             A.OneOf([
-                A.GaussNoise(always_apply=False, p=0.5),
+                A.GaussNoise(p=0.5),
                 A.ISONoise(),
                 A.MultiplicativeNoise(),
             ], p=0.2),
             A.GridDropout(
                 ratio=0.2,
-                unit_size_min=32,
-                unit_size_max=64,
                 random_offset=True,
                 p=0.2
             ),

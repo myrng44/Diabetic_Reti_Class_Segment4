@@ -25,6 +25,7 @@ class Trainer:
         self.val_loader = val_loader
         self.device = device
         self.task_type = task_type
+        self.scaler = torch.cuda.amp.GradScaler() if MIXED_PRECISION else None
 
         # Loss functions
         self.criterion_cls = FocalLoss(num_classes=CLASSIFICATION_CLASSES)
@@ -79,6 +80,10 @@ class Trainer:
 
         pbar = tqdm(self.train_loader, desc='Training')
         for batch_idx, batch_data in enumerate(pbar):
+            # Clear GPU cache periodically
+            if batch_idx % EMPTY_CACHE_FREQ == 0:
+                torch.cuda.empty_cache()
+
             # FIXED: Handle variable unpacking based on dataset type
             if len(batch_data) == 4:
                 # Classification dataset with masks
@@ -117,26 +122,46 @@ class Trainer:
             labels = labels.to(self.device)
             masks = masks.to(self.device)
 
-            # Forward pass
+            # Split batch for gradient accumulation
+            split_size = images.shape[0] // GRADIENT_ACCUMULATION_STEPS
+
+            for i in range(GRADIENT_ACCUMULATION_STEPS):
+                start_idx = i * split_size
+                end_idx = (i + 1) * split_size if i < GRADIENT_ACCUMULATION_STEPS - 1 else images.shape[0]
+
+                img_split = images[start_idx:end_idx]
+                label_split = labels[start_idx:end_idx]
+
+                # Forward pass
+                self.optimizer.zero_grad()
+                cls_out, seg_out = self.model(img_split)
+
+                # Calculate losses
+                loss_cls = self.criterion_cls(cls_out, label_split)
+                loss_seg = self.criterion_seg(seg_out, masks)
+
+                # Combined loss
+                loss = loss_cls + SEGMENTATION_BCE_WEIGHT * loss_seg
+                loss = loss / GRADIENT_ACCUMULATION_STEPS
+
+                if self.scaler is not None:
+                    self.scaler.scale(loss).backward()
+                else:
+                    loss.backward()
+
+                # Track losses
+                total_loss += loss.item()
+                total_cls_loss += loss_cls.item()
+                total_seg_loss += loss_seg.item()
+
+            # Update weights
+            if self.scaler is not None:
+                self.scaler.step(self.optimizer)
+                self.scaler.update()
+            else:
+                self.optimizer.step()
+
             self.optimizer.zero_grad()
-            cls_out, seg_out = self.model(images)
-
-            # Calculate losses
-            loss_cls = self.criterion_cls(cls_out, labels)
-            loss_seg = self.criterion_seg(seg_out, masks)
-
-            # Combined loss
-            loss = loss_cls + SEGMENTATION_BCE_WEIGHT * loss_seg
-
-            # Backward pass
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
-            self.optimizer.step()
-
-            # Track losses
-            total_loss += loss.item()
-            total_cls_loss += loss_cls.item()
-            total_seg_loss += loss_seg.item()
 
             # Update progress bar
             pbar.set_postfix({

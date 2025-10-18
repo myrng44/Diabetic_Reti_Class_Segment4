@@ -61,11 +61,15 @@ CLASSIFICATION_CLASS_NAMES = [
 # ================================
 # TRAINING PARAMETERS
 # ================================
-BATCH_SIZE = 4  # Reduced from 8 to prevent OOM
-LEARNING_RATE = 1e-4
+BATCH_SIZE = 4  # Reduced from default to prevent CUDA OOM
 NUM_EPOCHS = 50
-EARLY_STOPPING_PATIENCE = 10
+LEARNING_RATE = 1e-4
 WEIGHT_DECAY = 1e-5
+
+# Memory optimization
+GRADIENT_ACCUMULATION_STEPS = 4
+MIXED_PRECISION = True
+PIN_MEMORY = True
 
 # Cross validation
 K_FOLDS = 2  # Reduced for testing
