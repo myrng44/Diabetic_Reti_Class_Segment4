@@ -22,7 +22,7 @@ for dir_path in [RESULTS_DIR, LOGS_DIR, MODELS_DIR]:
 # ================================
 # IMAGE PROCESSING
 # ================================
-TARGET_SIZE = 512  # Increased from 384
+TARGET_SIZE = 384  # Increased from 384
 CLAHE_CLIP_LIMIT = 3.0  # Increased from 2.0
 CLAHE_TILE_GRID_SIZE = (16, 16)  # Increased from (8,8)
 FUNDUS_THRESHOLD = 15  # Increased from 10
@@ -63,12 +63,12 @@ CLASSIFICATION_CLASS_NAMES = [
 # ================================
 BATCH_SIZE = 8  # Increased from 8
 LEARNING_RATE = 5e-5  # Decreased from 1e-4
-NUM_EPOCHS = 100  # Increased from 50
+NUM_EPOCHS = 50  # Increased from 50
 EARLY_STOPPING_PATIENCE = 10  # Increased from 10
 WEIGHT_DECAY = 1e-4  # Increased from 1e-5
 
 # Cross validation
-K_FOLDS = 5  # Increased from 3
+K_FOLDS = 3
 
 # Loss weights
 SEGMENTATION_BCE_WEIGHT = 0.4  # Decreased to give more weight to classification

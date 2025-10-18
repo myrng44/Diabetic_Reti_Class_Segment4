@@ -445,7 +445,7 @@ if __name__ == "__main__":
             dataset=dataset,
             device=device,
             k_folds=2,
-            use_sango=False  # Set to True to test SANGO
+            use_sango=True  # Set to True to test SANGO
         )
 
         print("\n✓ Training module test completed!")

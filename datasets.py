@@ -289,7 +289,7 @@ class DataSplitter:
     def __init__(self, random_state=SEED):
         self.random_state = random_state
 
-    def split_classification_data(self, dataset, test_size=0.2, val_size=0.2):
+    def split_classification_data(self, dataset, test_size=0.2, val_size=0.1):
         """
         Split classification dataset into train/val/test.
         Args:
