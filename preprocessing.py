@@ -24,18 +24,65 @@ class FundusPreprocessor:
 
     def __init__(self, target_size=TARGET_SIZE):
         self.target_size = target_size
+        self.augmentation = self.get_augmentation_pipeline()
 
     def apply_clahe_rgb(self, image):
-        """Apply CLAHE on L channel in LAB color space and return RGB image."""
+        """Enhanced CLAHE application with additional color space processing."""
+        # Convert to LAB color space
         lab = cv2.cvtColor(image, cv2.COLOR_RGB2LAB)
         l, a, b = cv2.split(lab)
+
+        # Apply CLAHE on L channel with adaptive clip limit
         clahe = cv2.createCLAHE(
             clipLimit=CLAHE_CLIP_LIMIT,
             tileGridSize=CLAHE_TILE_GRID_SIZE
         )
         cl = clahe.apply(l)
+
+        # Apply additional contrast enhancement
+        cl = cv2.normalize(cl, None, alpha=0, beta=255, norm_type=cv2.NORM_MINMAX)
+
+        # Merge channels and convert back to RGB
         merged = cv2.merge((cl, a, b))
-        return cv2.cvtColor(merged, cv2.COLOR_LAB2RGB)
+        enhanced = cv2.cvtColor(merged, cv2.COLOR_LAB2RGB)
+
+        # Apply additional color correction
+        enhanced = cv2.addWeighted(enhanced, 1.2, image, 0.0, 0)
+        return enhanced
+
+    def get_augmentation_pipeline(self):
+        """Enhanced augmentation pipeline with more transformations."""
+        return A.Compose([
+            A.RandomRotate90(p=0.5),
+            A.Flip(p=0.5),
+            A.ShiftScaleRotate(
+                shift_limit=0.1,
+                scale_limit=0.2,
+                rotate_limit=30,
+                border_mode=cv2.BORDER_CONSTANT,
+                p=0.5
+            ),
+            A.OneOf([
+                A.RandomBrightnessContrast(
+                    brightness_limit=0.3,
+                    contrast_limit=0.3
+                ),
+                A.RandomGamma(gamma_limit=(80, 120)),
+            ], p=0.5),
+            A.OneOf([
+                A.GaussNoise(var_limit=(10.0, 50.0)),
+                A.ISONoise(),
+                A.MultiplicativeNoise(),
+            ], p=0.2),
+            A.CoarseDropout(
+                max_holes=8,
+                max_height=20,
+                max_width=20,
+                fill_value=0,
+                p=0.2
+            ),
+            ToTensorV2()
+        ])
 
     def fundus_circle_mask(self, image, thr=FUNDUS_THRESHOLD):
         """
@@ -57,25 +104,32 @@ class FundusPreprocessor:
         return mask
 
     def preprocess_image(self, image):
-        """
-        Main preprocessing pipeline.
-        Args:
-            image: RGB numpy array
-        Returns:
-            processed_image: RGB numpy array
-            circle_mask: Binary mask of fundus region
-        """
-        # Create fundus mask
+        """Enhanced preprocessing pipeline."""
+        # Create fundus mask with improved thresholding
         circle_mask = self.fundus_circle_mask(image)
 
-        # Apply mask to image
+        # Apply mask
         img_masked = image.copy()
         img_masked[circle_mask == 0] = 0
 
-        # Apply CLAHE
+        # Apply enhanced CLAHE
         img_clahe = self.apply_clahe_rgb(img_masked)
 
-        return img_clahe, circle_mask
+        # Apply bilateral filter for noise reduction while preserving edges
+        img_filtered = cv2.bilateralFilter(img_clahe, d=9, sigmaColor=75, sigmaSpace=75)
+
+        # Apply unsharp masking for detail enhancement
+        gaussian = cv2.GaussianBlur(img_filtered, (0, 0), 2.0)
+        img_enhanced = cv2.addWeighted(img_filtered, 1.5, gaussian, -0.5, 0)
+
+        # Resize with better interpolation
+        img_resized = cv2.resize(
+            img_enhanced,
+            (self.target_size, self.target_size),
+            interpolation=cv2.INTER_LANCZOS4
+        )
+
+        return img_resized, circle_mask
 
 
 class GaborFilter:
@@ -144,6 +198,64 @@ class GaborFilter:
         else:
             denoised = cv2.bilateralFilter(image, kernel_size, 80, 80)
         return denoised
+
+
+class AdaptiveGaborFilter:
+    """Enhanced Adaptive Gabor filter with dynamic parameter adjustment."""
+
+    def __init__(self, frequencies=GABOR_FREQUENCIES, angles=GABOR_ANGLES):
+        self.frequencies = frequencies
+        self.angles = np.deg2rad(angles)
+        self.sigma = GABOR_SIGMA
+        self.gamma = GABOR_GAMMA
+        self.kernel_size = GABOR_KERNEL_SIZE
+
+    def create_gabor_kernel(self, frequency, angle):
+        """Create Gabor kernel with dynamic parameters."""
+        sigma_x = self.sigma
+        sigma_y = self.sigma / self.gamma
+
+        # Calculate kernel size based on frequency
+        kernel_size = min(self.kernel_size,
+                         int(2 * np.ceil(max(sigma_x, sigma_y) * 3)))
+        if kernel_size % 2 == 0:
+            kernel_size += 1
+
+        return cv2.getGaborKernel(
+            (kernel_size, kernel_size),
+            sigma_x,
+            angle,
+            frequency,
+            self.gamma,
+            0,
+            ktype=cv2.CV_32F
+        )
+
+    def apply_gabor_bank(self, image):
+        """Apply enhanced Gabor filter bank with response normalization."""
+        if len(image.shape) == 3:
+            gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+        else:
+            gray = image.copy()
+
+        # Normalize input image
+        gray = cv2.normalize(gray, None, 0, 255, cv2.NORM_MINMAX)
+
+        responses = []
+        for freq in self.frequencies:
+            for angle in self.angles:
+                kernel = self.create_gabor_kernel(freq, angle)
+                response = cv2.filter2D(gray, cv2.CV_32F, kernel)
+                responses.append(response)
+
+        # Combine responses using maximum response
+        combined = np.maximum.reduce(responses)
+
+        # Normalize and enhance contrast
+        combined = cv2.normalize(combined, None, 0, 255, cv2.NORM_MINMAX)
+        combined = combined.astype(np.uint8)
+
+        return combined, responses
 
 
 def get_training_transforms(target_size=TARGET_SIZE):

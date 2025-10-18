@@ -22,18 +22,18 @@ for dir_path in [RESULTS_DIR, LOGS_DIR, MODELS_DIR]:
 # ================================
 # IMAGE PROCESSING
 # ================================
-TARGET_SIZE = 384
-CLAHE_CLIP_LIMIT = 2.0
-CLAHE_TILE_GRID_SIZE = (8, 8)
-FUNDUS_THRESHOLD = 10
+TARGET_SIZE = 512  # Increased from 384
+CLAHE_CLIP_LIMIT = 3.0  # Increased from 2.0
+CLAHE_TILE_GRID_SIZE = (16, 16)  # Increased from (8,8)
+FUNDUS_THRESHOLD = 15  # Increased from 10
 
 # Adaptive Chaotic Gabor Filter settings
-USE_ADAPTIVE_GABOR = True  # Enable AGF
-GABOR_FREQUENCIES = [0.1, 0.3, 0.5]
-GABOR_ANGLES = [0, 45, 90, 135]
-GABOR_SIGMA = 2.0
-GABOR_GAMMA = 0.5
-GABOR_KERNEL_SIZE = 31
+USE_ADAPTIVE_GABOR = True
+GABOR_FREQUENCIES = [0.1, 0.2, 0.3, 0.4, 0.5]  # Added more frequencies
+GABOR_ANGLES = [0, 30, 45, 60, 90, 120, 135, 150]  # Added more angles
+GABOR_SIGMA = 2.5  # Increased from 2.0
+GABOR_GAMMA = 0.7  # Increased from 0.5
+GABOR_KERNEL_SIZE = 41  # Increased from 31
 
 # ================================
 # SEGMENTATION SETTINGS
@@ -61,19 +61,19 @@ CLASSIFICATION_CLASS_NAMES = [
 # ================================
 # TRAINING PARAMETERS
 # ================================
-BATCH_SIZE = 2
-LEARNING_RATE = 1e-4
-NUM_EPOCHS = 50
-EARLY_STOPPING_PATIENCE = 10
-WEIGHT_DECAY = 1e-5
+BATCH_SIZE = 8  # Increased from 8
+LEARNING_RATE = 5e-5  # Decreased from 1e-4
+NUM_EPOCHS = 100  # Increased from 50
+EARLY_STOPPING_PATIENCE = 10  # Increased from 10
+WEIGHT_DECAY = 1e-4  # Increased from 1e-5
 
 # Cross validation
-K_FOLDS = 3
+K_FOLDS = 5  # Increased from 3
 
 # Loss weights
-SEGMENTATION_BCE_WEIGHT = 0.5
-CLASSIFICATION_FOCAL_ALPHA = 1.0
-CLASSIFICATION_FOCAL_GAMMA = 2.0
+SEGMENTATION_BCE_WEIGHT = 0.4  # Decreased to give more weight to classification
+CLASSIFICATION_FOCAL_ALPHA = 2.0  # Increased from 1.0
+CLASSIFICATION_FOCAL_GAMMA = 2.5  # Increased from 2.0
 
 # SANGO Optimization settings
 USE_SANGO_OPTIMIZATION = True  # Enable SANGO for hyperparameter search
@@ -90,8 +90,8 @@ SANGO_HYPERPARAMS = {
 # MODEL ARCHITECTURE
 # ================================
 # U-Net features
-UNET_FEATURES = [64, 128, 256, 512]
-UNET_DROPOUT = 0.2
+UNET_FEATURES = [64, 128, 256, 512, 1024]  # Added another layer
+UNET_DROPOUT = 0.3  # Increased from 0.2
 
 # Classification backbone
 CLASSIFICATION_BACKBONE = "densenet121"  # densenet121, efficientnet-b0, resnet50

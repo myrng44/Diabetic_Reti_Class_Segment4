@@ -37,22 +37,15 @@ class EnhancedSANGO:
             prey_identification_r: float = 0.02,
             verbose: bool = True
     ):
-        """
-        Initialize Enhanced SANGO.
+        # Default bounds if none provided
+        if bounds is None:
+            bounds = {
+                'hidden_dim1': (32, 256),
+                'hidden_dim2': (32, 256),
+                'dropout': (0.1, 0.5),
+                'lr': (1e-5, 1e-3)
+            }
 
-        Args:
-            fitness_function: Function to minimize (1 - F1_score)
-            dim: Dimension of search space
-            population_size: Number of individuals
-            max_iterations: Maximum iterations
-            bounds: Dictionary with parameter bounds
-                    {'hidden_dim1': (16, 256), 'hidden_dim2': (16, 256),
-                     'dropout': (0.1, 0.5), 'lr': (1e-5, 1e-3)}
-            learning_rate: Algorithm learning rate
-            prey_capture_df: Dynamic factor coefficient
-            prey_identification_r: Identification factor
-            verbose: Print progress
-        """
         self.fitness_function = fitness_function
         self.dim = dim
         self.N = population_size
@@ -63,18 +56,10 @@ class EnhancedSANGO:
         self.verbose = verbose
 
         # Setup bounds
-        if bounds is None:
-            bounds = {
-                'hidden_dim1': (32, 256),
-                'hidden_dim2': (32, 256),
-                'dropout': (0.1, 0.5),
-                'lr': (1e-5, 1e-3)
-            }
-
         self.bounds = bounds
         self.param_names = list(bounds.keys())
-        self.L_bound = np.array([bounds[k][0] for k in self.param_names])
-        self.U_bound = np.array([bounds[k][1] for k in self.param_names])
+        self.L_bound = np.array([bounds[k][0] for k in self.param_names], dtype=float)
+        self.U_bound = np.array([bounds[k][1] for k in self.param_names], dtype=float)
 
         # Track which params are discrete (int) vs continuous (float)
         self.discrete_params = ['hidden_dim1', 'hidden_dim2']
@@ -89,11 +74,39 @@ class EnhancedSANGO:
         self.convergence_curve = []
         self.fitness_history = []
 
+        # Simple cache to avoid duplicate expensive evaluations
+        self._fitness_cache: Dict[Tuple, float] = {}
+
         self.logger = logging.getLogger(__name__)
+
+    def _params_to_key(self, individual: np.ndarray) -> Tuple:
+        """Create a hashable key for caching from an individual array.
+        Discrete params are rounded to int; continuous params rounded to 6 decimals (or log space for lr).
+        """
+        key = []
+        for i, name in enumerate(self.param_names):
+            val = individual[i]
+            if name in self.discrete_params:
+                key.append(int(round(val)))
+            elif name == 'lr':
+                # represent LR in log10 rounded
+                key.append(round(float(np.log10(max(val, 1e-12))), 6))
+            else:
+                key.append(round(float(val), 6))
+        return tuple(key)
+
+    def _cached_eval(self, individual: np.ndarray) -> float:
+        k = self._params_to_key(individual)
+        if k in self._fitness_cache:
+            return self._fitness_cache[k]
+        params = self._decode_individual(individual)
+        val = float(self.fitness_function(params))
+        self._fitness_cache[k] = val
+        return val
 
     def initialize_population(self):
         """Initialize population with proper bounds for each parameter."""
-        self.population = np.zeros((self.N, self.dim))
+        self.population = np.zeros((self.N, self.dim), dtype=float)
 
         for i in range(self.N):
             for j in range(self.dim):
@@ -110,21 +123,16 @@ class EnhancedSANGO:
                             self.U_bound[j] - self.L_bound[j]
                     )
 
-        # Round discrete parameters
-        for idx in self.discrete_indices:
-            self.population[:, idx] = np.round(self.population[:, idx])
-
-        # Clip to bounds
+        # Do NOT permanently round discrete params in the float population; round only for evaluation
         self.population = np.clip(self.population, self.L_bound, self.U_bound)
 
-        # Evaluate fitness
-        self.fitness = np.array([self.fitness_function(self._decode_individual(ind))
-                                 for ind in self.population])
+        # Evaluate fitness (use caching)
+        self.fitness = np.array([self._cached_eval(ind) for ind in self.population], dtype=float)
 
         # Track best
-        best_idx = np.argmin(self.fitness)
+        best_idx = int(np.argmin(self.fitness))
         self.best_individual = self.population[best_idx].copy()
-        self.best_fitness = self.fitness[best_idx]
+        self.best_fitness = float(self.fitness[best_idx])
 
         if self.verbose:
             params = self._decode_individual(self.best_individual)
@@ -136,7 +144,7 @@ class EnhancedSANGO:
         params = {}
         for i, name in enumerate(self.param_names):
             if name in self.discrete_params:
-                params[name] = int(individual[i])
+                params[name] = int(round(individual[i]))
             else:
                 params[name] = float(individual[i])
         return params
@@ -150,7 +158,7 @@ class EnhancedSANGO:
 
     def prey_identification(self, t: int):
         """Phase 1: Prey Identification with adaptive search."""
-        new_population = np.zeros_like(self.population)
+        new_population = self.population.copy()
 
         for i in range(self.N):
             # Select random prey
@@ -171,19 +179,16 @@ class EnhancedSANGO:
             for j, param_name in enumerate(self.param_names):
                 if param_name in ['lr']:
                     # Keep learning rate in log space for better exploration
-                    new_population[i, j] = np.clip(new_population[i, j],
-                                                   self.L_bound[j], self.U_bound[j])
+                    new_population[i, j] = np.clip(new_population[i, j], self.L_bound[j], self.U_bound[j])
                 elif param_name in self.discrete_params:
-                    # Round discrete parameters
-                    new_population[i, j] = np.round(new_population[i, j])
+                    # Do not permanently round; allow float updates
+                    new_population[i, j] = np.clip(new_population[i, j], self.L_bound[j], self.U_bound[j])
 
                 # Clip to bounds
-                new_population[i, j] = np.clip(new_population[i, j],
-                                               self.L_bound[j], self.U_bound[j])
+                new_population[i, j] = np.clip(new_population[i, j], self.L_bound[j], self.U_bound[j])
 
-        # Evaluate new positions
-        new_fitness = np.array([self.fitness_function(self._decode_individual(ind))
-                                for ind in new_population])
+        # Evaluate new positions (cached)
+        new_fitness = np.array([self._cached_eval(ind) for ind in new_population], dtype=float)
 
         # Update if improved
         for i in range(self.N):
@@ -193,14 +198,13 @@ class EnhancedSANGO:
 
     def prey_capture(self, t: int):
         """Phase 2: Prey Capture with adaptive dynamic factor."""
-        new_population = np.zeros_like(self.population)
+        new_population = self.population.copy()
 
         # Adaptive radius (decreases over time)
-        R = self.r_coef * (1 - t / self.T)
+        R = self.r_coef * (1 - t / max(1, self.T))
 
         # Dynamic Factor with self-adaptive component
-        # Increases exploration early, exploitation later
-        base_df = self.df_coef * (2 * np.random.rand() - 1) * np.exp(-((t / self.T) ** 2))
+        base_df = self.df_coef * (2 * np.random.rand() - 1) * np.exp(-((t / max(1, self.T)) ** 2))
 
         # Add diversity maintenance
         diversity = np.std(self.fitness) / (np.mean(self.fitness) + 1e-8)
@@ -215,15 +219,11 @@ class EnhancedSANGO:
 
             # Handle parameter types
             for j, param_name in enumerate(self.param_names):
-                if param_name in self.discrete_params:
-                    new_population[i, j] = np.round(new_population[i, j])
-
-                new_population[i, j] = np.clip(new_population[i, j],
-                                               self.L_bound[j], self.U_bound[j])
+                # clip to bounds
+                new_population[i, j] = np.clip(new_population[i, j], self.L_bound[j], self.U_bound[j])
 
         # Evaluate
-        new_fitness = np.array([self.fitness_function(self._decode_individual(ind))
-                                for ind in new_population])
+        new_fitness = np.array([self._cached_eval(ind) for ind in new_population], dtype=float)
 
         # Update if improved
         for i in range(self.N):
@@ -248,23 +248,23 @@ class EnhancedSANGO:
         for t in range(self.T):
             if self.verbose and (t % 5 == 0 or t == self.T - 1):
                 params = self._decode_individual(self.best_individual)
-                f1_score = 1 - self.best_fitness
-                self.logger.info(f"Iter {t}/{self.T}, F1: {f1_score:.4f}, Params: {params}")
+                f1_score_val = 1 - self.best_fitness
+                self.logger.info(f"Iter {t}/{self.T}, F1: {f1_score_val:.4f}, Params: {params}")
 
             # SANGO phases
             self.prey_identification(t)
             self.prey_capture(t)
 
             # Update global best
-            best_idx = np.argmin(self.fitness)
+            best_idx = int(np.argmin(self.fitness))
             if self.fitness[best_idx] < self.best_fitness:
                 self.best_individual = self.population[best_idx].copy()
                 self.best_fitness = self.fitness[best_idx]
 
                 if self.verbose:
                     params = self._decode_individual(self.best_individual)
-                    f1 = 1 - self.best_fitness
-                    self.logger.info(f"→ New best! F1: {f1:.4f}, Params: {params}")
+                    f1_val = 1 - self.best_fitness
+                    self.logger.info(f"→ New best! F1: {f1_val:.4f}, Params: {params}")
 
             # Record convergence
             self.convergence_curve.append(self.best_fitness)
@@ -289,6 +289,16 @@ class EnhancedSANGO:
             self.logger.info(f"{'=' * 60}\n")
 
         return best_params, self.best_fitness, self.convergence_curve
+
+    # Backwards-compatible wrapper expected by older code that calls `.run()`
+    def run(self):
+        """Run optimization and return best position array and best fitness (compat).
+        Older code expects (best_pos, best_fitness) where best_pos is array-like in param_names order.
+        """
+        best_params, best_fitness, curve = self.optimize()
+        # Convert dict to ordered array
+        best_array = np.array([best_params[k] for k in self.param_names])
+        return best_array, best_fitness
 
 
 def create_fitness_function_f1(model_class, train_loader, val_loader, device,
@@ -365,8 +375,8 @@ def create_fitness_function_f1(model_class, train_loader, val_loader, device,
                     all_preds.extend(preds.cpu().numpy())
                     all_labels.extend(labels.numpy())
 
-            # Calculate F1 score (macro average for multi-class)
-            f1 = f1_score(all_labels, all_preds, average='macro', zero_division=0)
+            # Calculate F1 score (weighted average to match training validation)
+            f1 = f1_score(all_labels, all_preds, average='weighted', zero_division=0)
 
             # Return 1 - F1 (lower is better for minimization)
             fitness = 1.0 - f1

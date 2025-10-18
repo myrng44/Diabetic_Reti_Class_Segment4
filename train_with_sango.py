@@ -328,10 +328,23 @@ def k_fold_cross_validation(dataset, device, k_folds=K_FOLDS, use_sango=True):
                 val_loader=val_loader,
                 device=device,
                 use_sango=True,
-                num_classes=CLASSIFICATION_CLASSES
+                num_classes=CLASSIFICATION_CLASSES,
+                # Stronger SANGO settings for better optimization
+                sango_pop_size=15,           # Increased population
+                sango_max_iterations=80,     # More iterations
+                sango_eval_epochs=3,         # Train longer per eval
+                sango_train_batches=25,      # More training coverage
+                sango_val_batches=15         # More validation coverage
             )
 
-            # Save best params for other folds
+            # Save best params for other folds (with defaults in case of failure)
+            if best_params is None:
+                best_params = {
+                    'hidden_dim1': 256,
+                    'hidden_dim2': 128,
+                    'dropout': 0.3,
+                    'lr': 1e-4
+                }
             learning_rate = best_params['lr']
 
         else:

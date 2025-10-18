@@ -11,9 +11,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import numpy as np
-from sklearn.metrics import f1_score
 from config import *
-import traceback
 
 
 # ===================================
@@ -332,21 +330,28 @@ def create_paper_model_with_sango(
         val_loader,
         device,
         use_sango=True,
-        num_classes=CLASSIFICATION_CLASSES
+        num_classes=CLASSIFICATION_CLASSES,
+        # SANGO configuration (tunable)
+        sango_pop_size: int = 12,
+        sango_max_iterations: int = 60,
+        sango_eval_epochs: int = 2,
+        sango_train_batches: int = 20,
+        sango_val_batches: int = 10,
 ):
     """
     Create model with SANGO optimization for 4 hyperparameters - FIXED VERSION
     """
 
     if use_sango:
-        # Import here to check if available
+        # Import here to check if available and set SANGO_class for later use
         try:
             from enhanced_sango import EnhancedSANGO
             SANGO_class = EnhancedSANGO
             print("Using EnhancedSANGO")
         except ImportError:
             try:
-                from sango import SANGO as SANGO
+                from sango import SANGO as SANGO_impl
+                SANGO_class = SANGO_impl
                 print("Using original SANGO")
             except ImportError:
                 print("ERROR: No SANGO implementation found!")
@@ -367,9 +372,10 @@ def create_paper_model_with_sango(
         # Fitness function - FIXED
         def fitness_function(params):
             """
-            Evaluate model with given hyperparameters - FIXED VERSION
+            Evaluate model with given hyperparameters - improved stability and reproducibility.
             params can be either dict or array
             """
+            import random as _random
             try:
                 # Handle both dict and array input
                 if isinstance(params, dict):
@@ -386,6 +392,19 @@ def create_paper_model_with_sango(
                 print(f"\nTesting: Dense={densenet_hidden}, GRU={gru_hidden}, "
                       f"Drop={dropout:.3f}, LR={lr:.6f}")
 
+                # Reproducible seeds for each fitness evaluation (helps reduce noise)
+                try:
+                    torch.manual_seed(SEED)
+                    np.random.seed(SEED)
+                    _random.seed(SEED)
+                    if torch.cuda.is_available():
+                        torch.cuda.manual_seed_all(SEED)
+                        # Keep cuDNN deterministic for reproducibility (may slow down)
+                        torch.backends.cudnn.deterministic = True
+                        torch.backends.cudnn.benchmark = False
+                except Exception:
+                    pass
+
                 # Create model
                 model = PaperMultiModelDR(
                     num_classes=num_classes,
@@ -399,13 +418,15 @@ def create_paper_model_with_sango(
                 # Setup training
                 criterion_cls = FocalLoss(num_classes=num_classes)
                 criterion_seg = nn.BCEWithLogitsLoss()
-                optimizer = optim.Adam(model.parameters(), lr=lr)
+                optimizer = optim.AdamW(model.parameters(), lr=lr)
 
-                # Quick training (2 epochs for evaluation)
+                # Quick training (controlled number of batches/epochs for SANGO evaluation)
                 model.train()
-                for epoch in range(2):
+                max_train_batches = min(sango_train_batches, len(train_loader))
+                train_batches = 0
+
+                for epoch in range(sango_eval_epochs):
                     epoch_loss = 0
-                    batch_count = 0
 
                     for batch_data in train_loader:
                         # FIXED: Handle variable unpacking
@@ -434,17 +455,21 @@ def create_paper_model_with_sango(
                         optimizer.step()
 
                         epoch_loss += loss.item()
-                        batch_count += 1
+                        train_batches += 1
 
                         # Limit batches for quick evaluation
-                        if batch_count >= 10:
+                        if train_batches >= max_train_batches:
                             break
 
-                # Validation
+                    if train_batches >= max_train_batches:
+                        break
+
+                # Validation on a slightly larger batch set for more stable F1 estimate
                 model.eval()
                 all_preds = []
                 all_labels = []
                 val_batch_count = 0
+                max_val_batches = min(sango_val_batches, len(val_loader))
 
                 with torch.no_grad():
                     for batch_data in val_loader:
@@ -462,12 +487,13 @@ def create_paper_model_with_sango(
                         all_labels.extend(labels.numpy())
 
                         val_batch_count += 1
-                        if val_batch_count >= 5:
+                        if val_batch_count >= max_val_batches:
                             break
 
-                # Calculate F1 score
+                # Calculate F1 score (use weighted average to match validation metric)
+                from sklearn.metrics import f1_score as _f1
                 if len(all_preds) > 0 and len(all_labels) > 0:
-                    f1 = f1_score(all_labels, all_preds, average='weighted', zero_division=0)
+                    f1 = _f1(all_labels, all_preds, average='weighted', zero_division=0)
                     fitness = 1 - f1  # Minimize
                 else:
                     f1 = 0.0
@@ -483,7 +509,6 @@ def create_paper_model_with_sango(
 
             except Exception as e:
                 print(f"  → Error in fitness function: {str(e)}")
-                print(f"  → Traceback: {traceback.format_exc()}")
                 return 1.0  # Worst fitness
 
         # Initialize SANGO
@@ -491,20 +516,20 @@ def create_paper_model_with_sango(
             sango = SANGO_class(
                 fitness_function=fitness_function,
                 dim=4,
-                population_size=10,
-                max_iterations=50,
+                population_size=sango_pop_size,
+                max_iterations=sango_max_iterations,
                 bounds={
-                    'hidden_dim1': (64, 256),  # GRU layer 1
-                    'hidden_dim2': (64, 256),  # GRU layer 2
+                    'hidden_dim1': (64, 256),  # DenseNet Hidden Dim
+                    'hidden_dim2': (64, 256),  # GRU Hidden Dim
                     'dropout': (0.1, 0.5),  # Dropout rate
                     'lr': (1e-5, 1e-3)
-                }  # ✓ Hỗ trợ cả 2 format
+                }
             )
 
             print(f"\nSANGO Configuration:")
-            print(f"  Population Size: 10")
-            print(f"  Max Iterations: 50")
-            print(f"  Total Evaluations: 500")
+            print(f"  Population Size: {sango_pop_size}")
+            print(f"  Max Iterations: {sango_max_iterations}")
+            print(f"  Total Evaluations: {sango_pop_size * sango_max_iterations}")
             print()
 
             # Run optimization

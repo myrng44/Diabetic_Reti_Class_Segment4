@@ -282,8 +282,20 @@ def k_fold_cross_validation(
         # Create model (with SANGO for first fold only)
         if fold == 0 and use_sango:
             model, best_params = create_paper_model_with_sango(
-                train_loader, val_loader, device, use_sango=True
+                train_loader=train_loader,
+                val_loader=val_loader,
+                device=device,
+                use_sango=True,
+                num_classes=CLASSIFICATION_CLASSES,
+                # Enhanced SANGO settings for better optimization
+                sango_pop_size=15,
+                sango_max_iterations=80,
+                sango_eval_epochs=3,
+                sango_train_batches=25,
+                sango_val_batches=15
             )
+            if best_params is None:
+                best_params = {'lr': 1e-4}
             logger.info(f"SANGO optimized parameters: {best_params}")
         else:
             model = PaperMultiModelDR(num_classes=CLASSIFICATION_CLASSES)
