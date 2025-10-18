@@ -60,7 +60,6 @@ class FundusPreprocessor:
                 scale=(0.8, 1.2),
                 translate_percent=(-0.1, 0.1),
                 rotate=(-30, 30),
-                mode=cv2.BORDER_CONSTANT,
                 p=0.5
             ),
             A.OneOf([
@@ -71,17 +70,22 @@ class FundusPreprocessor:
                 A.RandomGamma(gamma_limit=(80, 120)),
             ], p=0.5),
             A.OneOf([
-                A.GaussNoise(var_limit=(0.1, 0.5)),
+                A.GaussNoise(mean=0, per_channel=True, var_limit=0.1),
                 A.ISONoise(),
                 A.MultiplicativeNoise(),
             ], p=0.2),
-            A.Cutout(
-                num_holes=8,
-                max_h_size=20,
-                max_w_size=20,
+            A.CoarseDropout(
+                max_holes=8,
+                max_height=32,
+                max_width=32,
+                min_holes=5,
+                min_height=8,
+                min_width=8,
                 fill_value=0,
+                mask_fill_value=0,
                 p=0.2
             ),
+            A.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
             ToTensorV2()
         ])
 
