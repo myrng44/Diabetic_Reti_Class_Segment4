@@ -56,11 +56,11 @@ class FundusPreprocessor:
             A.RandomRotate90(p=0.5),
             A.HorizontalFlip(p=0.5),
             A.VerticalFlip(p=0.5),
-            A.ShiftScaleRotate(
-                shift_limit=0.1,
-                scale_limit=0.2,
-                rotate_limit=30,
-                border_mode=cv2.BORDER_CONSTANT,
+            A.Affine(
+                scale=(0.8, 1.2),
+                translate_percent=(-0.1, 0.1),
+                rotate=(-30, 30),
+                mode=cv2.BORDER_CONSTANT,
                 p=0.5
             ),
             A.OneOf([
@@ -71,14 +71,14 @@ class FundusPreprocessor:
                 A.RandomGamma(gamma_limit=(80, 120)),
             ], p=0.5),
             A.OneOf([
-                A.GaussNoise(var_limit=(10.0, 50.0)),
+                A.GaussNoise(var_limit=(0.1, 0.5)),
                 A.ISONoise(),
                 A.MultiplicativeNoise(),
             ], p=0.2),
-            A.CoarseDropout(
-                max_holes=8,
-                max_height=20,
-                max_width=20,
+            A.Cutout(
+                num_holes=8,
+                max_h_size=20,
+                max_w_size=20,
                 fill_value=0,
                 p=0.2
             ),

@@ -602,6 +602,32 @@ def create_paper_model_with_sango(
 
 
 # ===================================
+# SANGO Model Creation
+# ===================================
+
+def create_paper_model_with_sango(hidden_dim1=256, hidden_dim2=128, dropout=0.3,
+                                lr=1e-4, num_classes=CLASSIFICATION_CLASSES,
+                                segmentation_classes=SEGMENTATION_CLASSES):
+    """Create model with SANGO optimized parameters."""
+    try:
+        model = PaperMultiModelDR(
+            num_classes=num_classes,
+            segmentation_classes=segmentation_classes,
+            densenet_hidden_dim=int(hidden_dim1),
+            gru_hidden_dim=int(hidden_dim2),
+            gru_dropout=float(dropout)
+        )
+        return model
+    except Exception as e:
+        print(f"Error creating model with SANGO params: {str(e)}")
+        # Return default model if there's an error
+        return PaperMultiModelDR(
+            num_classes=num_classes,
+            segmentation_classes=segmentation_classes
+        )
+
+
+# ===================================
 # Test
 # ===================================
 

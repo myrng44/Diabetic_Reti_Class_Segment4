@@ -1,5 +1,5 @@
 """
-Training module for enhanced models with SANGO optimization - FIXED
+Training module for enhanced models with SANGO optimization
 Handles both classification and segmentation tasks
 """
 
@@ -421,6 +421,184 @@ def k_fold_cross_validation(dataset, device, k_folds=K_FOLDS, use_sango=True):
               f"Acc={result['accuracy']:.4f}")
 
     return fold_results
+
+
+def train_with_cross_validation(task_type='both'):
+    """Main training function with k-fold cross validation"""
+    print("\n======================================================================")
+    print(f"K-FOLD CROSS VALIDATION (K={K_FOLDS})")
+    print("======================================================================\n")
+
+    # Load all data
+    if task_type in ['classification', 'both']:
+        dataset = ClassificationDataset(
+            data_dir=CLASSIFICATION_TRAIN_DIR,
+            labels_file=CLASSIFICATION_TRAIN_CSV
+        )
+        print(f"Found {len(dataset)} images for classification")
+
+    if task_type in ['segmentation', 'both']:
+        seg_dataset = SegmentationDataset(
+            image_dir=SEGMENTATION_TRAIN_IMG_DIR,
+            mask_dirs=SEGMENTATION_TRAIN_MASK_DIRS
+        )
+        print(f"Found {len(seg_dataset)} images for segmentation")
+
+    device = torch.device(DEVICE)
+    print(f"Device: {device}")
+
+    # Prepare cross validation
+    if task_type in ['classification', 'both']:
+        labels = [label for _, label, _ in dataset]
+        kfold = StratifiedKFold(n_splits=K_FOLDS, shuffle=True, random_state=SEED)
+        splits = list(kfold.split(np.zeros(len(dataset)), labels))
+
+    f1_scores = []
+    accuracies = []
+
+    for fold, (train_idx, val_idx) in enumerate(splits, 1):
+        print(f"\n======================================================================")
+        print(f"FOLD {fold}/{K_FOLDS}")
+        print("======================================================================")
+
+        # Use 90% of data for training, 10% for validation
+        train_size = int(0.9 * len(train_idx))
+        train_indices = train_idx[:train_size]
+        val_indices = train_idx[train_size:]
+
+        train_subset = Subset(dataset, train_indices)
+        val_subset = Subset(dataset, val_indices)
+
+        print(f"Train samples: {len(train_subset)}, Val samples: {len(val_subset)}")
+
+        train_loader = DataLoader(
+            train_subset,
+            batch_size=BATCH_SIZE,
+            shuffle=True,
+            num_workers=NUM_WORKERS,
+            pin_memory=True
+        )
+        val_loader = DataLoader(
+            val_subset,
+            batch_size=BATCH_SIZE,
+            shuffle=False,
+            num_workers=NUM_WORKERS,
+            pin_memory=True
+        )
+
+        # Run SANGO only on first fold
+        if fold == 1:
+            print("\n🔍 Running SANGO optimization (only on first fold)...")
+            print("Using EnhancedSANGO")
+            try:
+                from enhanced_sango import EnhancedSANGO
+                sango = EnhancedSANGO(
+                    param_ranges={
+                        'hidden_dim1': (128, 512),
+                        'hidden_dim2': (64, 256),
+                        'dropout': (0.1, 0.5),
+                        'lr': (1e-5, 1e-3)
+                    },
+                    population_size=15,
+                    max_iterations=80
+                )
+
+                def fitness_function(params):
+                    try:
+                        model = create_paper_model_with_sango(
+                            hidden_dim1=int(params['hidden_dim1']),
+                            hidden_dim2=int(params['hidden_dim2']),
+                            dropout=float(params['dropout'])
+                        ).to(device)
+
+                        trainer = Trainer(model, train_loader, val_loader, device)
+                        trainer.setup_training(learning_rate=float(params['lr']))
+
+                        # Quick evaluation (3 epochs)
+                        for _ in range(3):
+                            trainer.train_epoch()
+                        metrics = trainer.validate_epoch()
+
+                        # Clean up
+                        del model
+                        torch.cuda.empty_cache()
+
+                        return -metrics['f1_score']  # Negative because SANGO minimizes
+                    except Exception as e:
+                        print(f"Error in fitness function: {str(e)}")
+                        return float('inf')
+
+                best_params = sango.optimize(fitness_function)
+                print("\nBest parameters found by SANGO:")
+                for param, value in best_params.items():
+                    print(f"  {param}: {value}")
+
+                # Create model with best parameters
+                model = create_paper_model_with_sango(**best_params).to(device)
+                learning_rate = best_params['lr']
+
+            except Exception as e:
+                print(f"\nError during SANGO optimization: {str(e)}")
+                print("Falling back to default parameters...")
+                model = PaperMultiModelDR().to(device)
+                learning_rate = LEARNING_RATE
+        else:
+            # Use best params from first fold if available
+            if 'best_params' in locals():
+                model = create_paper_model_with_sango(**best_params).to(device)
+                learning_rate = best_params['lr']
+            else:
+                model = PaperMultiModelDR().to(device)
+                learning_rate = LEARNING_RATE
+
+        # Setup trainer with proper error handling
+        trainer = Trainer(model, train_loader, val_loader, device)
+        trainer.setup_training(learning_rate=learning_rate)
+
+        try:
+            # Train
+            print(f"\n🚀 Training Fold {fold}...")
+            history = trainer.train(num_epochs=NUM_EPOCHS)
+
+            # Get final validation metrics
+            final_metrics = trainer.validate_epoch()
+
+            f1_scores.append(final_metrics['f1_score'])
+            accuracies.append(final_metrics['accuracy'])
+
+            print(f"\n✓ Fold {fold} Complete:")
+            print(f"  F1-Score: {final_metrics['f1_score']:.4f}")
+            print(f"  Accuracy: {final_metrics['accuracy']:.4f}")
+
+        except Exception as e:
+            print(f"\nError during training: {str(e)}")
+            continue
+
+        # Cleanup
+        del model, trainer
+        torch.cuda.empty_cache()
+
+    # Print summary
+    if f1_scores:
+        print(f"\n{'=' * 70}")
+        print("CROSS-VALIDATION SUMMARY")
+        print(f"{'=' * 70}")
+
+        avg_f1 = np.mean(f1_scores)
+        std_f1 = np.std(f1_scores)
+        avg_acc = np.mean(accuracies)
+
+        print(f"\nAverage F1-Score: {avg_f1:.4f} ± {std_f1:.4f}")
+        print(f"Average Accuracy: {avg_acc:.4f}")
+
+        print("\nPer-fold results:")
+        for fold, (f1, acc) in enumerate(zip(f1_scores, accuracies), 1):
+            print(f"  Fold {fold}: F1={f1:.4f}, Acc={acc:.4f}")
+
+    return {
+        'f1_scores': f1_scores,
+        'accuracies': accuracies
+    }
 
 
 if __name__ == "__main__":
