@@ -103,124 +103,60 @@ class ClassificationDataset(Dataset):
 
 
 class SegmentationDataset(Dataset):
-    """Dataset for lesion segmentation."""
+    """Dataset for diabetic retinopathy segmentation."""
 
-    def __init__(self, image_dir, mask_dirs, transform=None, preprocessor=None,
-                 image_exts=(".jpg", ".jpeg", ".png", ".JPG", ".PNG")):
+    def __init__(self, image_dir, mask_dirs, transform=None, preprocessor=None):
         """
         Args:
-            image_dir: Directory containing images
-            mask_dirs: Dictionary mapping lesion types to mask directories
+            image_dir: Directory containing original images
+            mask_dirs: Dictionary mapping lesion type to mask directory
             transform: Albumentations transform pipeline
             preprocessor: Image preprocessor instance
-            image_exts: Supported image extensions
         """
         self.image_dir = image_dir
         self.mask_dirs = mask_dirs
         self.transform = transform
         self.preprocessor = preprocessor or FundusPreprocessor()
 
-        # Find all images
-        files = []
-        for ext in image_exts:
-            files.extend(glob(os.path.join(image_dir, f"*{ext}")))
-        self.image_files = sorted([os.path.basename(p) for p in files])
-
-        # Mask file suffixes
-        self.suffix = {"MA": "_MA.tif", "HE": "_HE.tif", "EX": "_EX.tif"}
-
-        # Check mask directories
-        for k, d in mask_dirs.items():
-            if not os.path.isdir(d):
-                print(f"[WARN] Mask folder for {k} does not exist: {d}")
-
-        print(f"Found {len(self.image_files)} images for segmentation")
+        # Get all image paths
+        self.image_paths = sorted(glob(os.path.join(image_dir, '*.jpg')))
+        self.image_names = [os.path.basename(p) for p in self.image_paths]
 
     def __len__(self):
-        return len(self.image_files)
+        return len(self.image_paths)
 
     def __getitem__(self, idx):
-        img_name = self.image_files[idx]
-        img_path = os.path.join(self.image_dir, img_name)
-
         # Load image
-        image_bgr = cv2.imread(img_path, cv2.IMREAD_COLOR)
-        if image_bgr is None:
-            raise RuntimeError(f"Cannot read image: {img_path}")
-        image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+        image_path = self.image_paths[idx]
+        image_name = self.image_names[idx]
+        image = cv2.imread(image_path)
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
-        # Apply preprocessing
-        processed_image, circle_mask = self.preprocessor.preprocess_image(image_rgb)
-
-        # Load masks
-        base = os.path.splitext(img_name)[0]
+        # Load masks for each lesion type
         masks = []
-
-        for key in ["MA", "HE", "EX"]:
-            folder = self.mask_dirs.get(key, "")
-            mask_path = os.path.join(folder, base + self.suffix[key]) if folder else ""
-
-            if mask_path and os.path.exists(mask_path):
-                try:
-                    raw_mask = self._read_mask_tif(mask_path)
-                    if raw_mask is None:
-                        mask = np.zeros(processed_image.shape[:2], dtype=np.uint8)
-                    else:
-                        if raw_mask.ndim == 3:
-                            raw_mask = raw_mask[..., 0]
-                        mask = (raw_mask > 0).astype(np.uint8)
-                except Exception as e:
-                    print(f"Warning: Could not read mask {mask_path}: {e}")
-                    mask = np.zeros(processed_image.shape[:2], dtype=np.uint8)
+        for lesion_type in ['MA', 'HE', 'EX']:  # Microaneurysms, Hemorrhages, Exudates
+            mask_path = os.path.join(self.mask_dirs[lesion_type], image_name)
+            if os.path.exists(mask_path):
+                mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
+                mask = (mask > 0).astype(np.float32)
             else:
-                mask = np.zeros(processed_image.shape[:2], dtype=np.uint8)
-
-            # Resize mask to match image if necessary
-            if mask.shape != circle_mask.shape:
-                mask = cv2.resize(mask, (processed_image.shape[1], processed_image.shape[0]),
-                                interpolation=cv2.INTER_NEAREST)
-
-            # Apply circle mask
-            mask[circle_mask == 0] = 0
+                mask = np.zeros((image.shape[0], image.shape[1]), dtype=np.float32)
             masks.append(mask)
 
-        # Stack masks (H, W, C)
-        multi_mask = np.stack(masks, axis=-1)
+        # Stack masks into a single array
+        masks = np.stack(masks, axis=0)
+
+        # Preprocess image
+        if self.preprocessor:
+            image, _ = self.preprocessor.preprocess_image(image)
 
         # Apply transforms
         if self.transform:
-            augmented = self.transform(image=processed_image, mask=multi_mask)
-            image_tensor = augmented["image"]
-            mask_tensor = augmented["mask"]
-        else:
-            # Convert manually
-            image_tensor = torch.from_numpy(processed_image.transpose(2, 0, 1)).float() / 255.0
-            mask_tensor = torch.from_numpy(multi_mask.transpose(2, 0, 1)).float()
+            augmented = self.transform(image=image, masks=masks)
+            image = augmented['image']
+            masks = augmented['masks']
 
-        # Ensure correct tensor format
-        if isinstance(mask_tensor, np.ndarray):
-            mask_tensor = torch.from_numpy(mask_tensor.transpose(2, 0, 1)).float()
-        elif torch.is_tensor(mask_tensor) and mask_tensor.ndim == 3 and mask_tensor.shape[0] != SEGMENTATION_CLASSES:
-            if mask_tensor.shape[-1] == SEGMENTATION_CLASSES:
-                mask_tensor = mask_tensor.permute(2, 0, 1).float()
-
-        if isinstance(image_tensor, np.ndarray):
-            image_tensor = torch.from_numpy(image_tensor.transpose(2, 0, 1)).float() / 255.0
-
-        return image_tensor, mask_tensor, img_name
-
-    def _read_mask_tif(self, path):
-        """Read TIF mask with fallback options."""
-        try:
-            return tifffile.imread(path)
-        except Exception as e:
-            warnings.warn(f"tifffile.imread failed for {path}: {str(e)}. Trying cv2 fallback.")
-            mask_cv = cv2.imread(path, cv2.IMREAD_UNCHANGED)
-            if mask_cv is not None:
-                if mask_cv.ndim == 3:
-                    return mask_cv[..., 0]
-                return mask_cv
-            raise
+        return image, masks, image_name
 
 
 class MultiTaskDataset(Dataset):

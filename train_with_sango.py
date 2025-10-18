@@ -13,6 +13,7 @@ from tqdm import tqdm
 import os
 from config import *
 from enhanced_models import PaperMultiModelDR, FocalLoss, create_paper_model_with_sango
+from datasets import SegmentationDataset, ClassificationDataset
 
 
 class Trainer:
@@ -276,11 +277,7 @@ class Trainer:
 
 
 def k_fold_cross_validation(dataset, device, k_folds=K_FOLDS, use_sango=True):
-    """
-    K-fold cross validation with optional SANGO optimization - FIXED
-    """
-    from torch.utils.data import Subset
-
+    """K-fold cross validation with optional SANGO optimization"""
     print(f"\n{'=' * 70}")
     print(f"K-FOLD CROSS VALIDATION (K={k_folds})")
     print(f"{'=' * 70}\n")
@@ -291,12 +288,11 @@ def k_fold_cross_validation(dataset, device, k_folds=K_FOLDS, use_sango=True):
 
     # Stratified K-Fold
     skf = StratifiedKFold(n_splits=k_folds, shuffle=True, random_state=SEED)
-
     fold_results = []
 
-    for fold, (train_idx, val_idx) in enumerate(skf.split(indices, labels)):
+    for fold, (train_idx, val_idx) in enumerate(skf.split(indices, labels), 1):
         print(f"\n{'=' * 70}")
-        print(f"FOLD {fold + 1}/{k_folds}")
+        print(f"FOLD {fold}/{k_folds}")
         print(f"{'=' * 70}")
         print(f"Train samples: {len(train_idx)}, Val samples: {len(val_idx)}")
 
@@ -320,105 +316,121 @@ def k_fold_cross_validation(dataset, device, k_folds=K_FOLDS, use_sango=True):
             pin_memory=True
         )
 
-        # Create model (with SANGO optimization only for first fold)
-        if fold == 0 and use_sango:
+        # Run SANGO only on first fold
+        if fold == 1 and use_sango:
             print("\n🔍 Running SANGO optimization (only on first fold)...")
-            model, best_params = create_paper_model_with_sango(
-                train_loader=train_loader,
-                val_loader=val_loader,
-                device=device,
-                use_sango=True,
-                num_classes=CLASSIFICATION_CLASSES,
-                # Stronger SANGO settings for better optimization
-                sango_pop_size=15,           # Increased population
-                sango_max_iterations=80,     # More iterations
-                sango_eval_epochs=3,         # Train longer per eval
-                sango_train_batches=25,      # More training coverage
-                sango_val_batches=15         # More validation coverage
-            )
-
-            # Save best params for other folds (with defaults in case of failure)
-            if best_params is None:
-                best_params = {
-                    'hidden_dim1': 256,
-                    'hidden_dim2': 128,
-                    'dropout': 0.3,
-                    'lr': 1e-4
-                }
-            learning_rate = best_params['lr']
-
-        else:
-            # Use params from first fold or defaults
-            if fold > 0 and use_sango and 'best_params' in locals():
-                print(f"\n📋 Using optimized params from Fold 1")
-                model = PaperMultiModelDR(
-                    num_classes=CLASSIFICATION_CLASSES,
-                    segmentation_classes=SEGMENTATION_CLASSES,
-                    densenet_hidden_dim=best_params['hidden_dim1'],
-                    gru_hidden_dim=best_params['hidden_dim2'],
-                    gru_dropout=best_params['dropout']
+            try:
+                from enhanced_sango import EnhancedSANGO
+                sango = EnhancedSANGO(
+                    param_ranges={
+                        'hidden_dim1': (128, 512),
+                        'hidden_dim2': (64, 256),
+                        'dropout': (0.1, 0.5),
+                        'lr': (1e-5, 1e-3)
+                    },
+                    population_size=15,
+                    max_iterations=80
                 )
+
+                def fitness_function(params):
+                    try:
+                        model = create_paper_model_with_sango(
+                            hidden_dim1=int(params['hidden_dim1']),
+                            hidden_dim2=int(params['hidden_dim2']),
+                            dropout=float(params['dropout']),
+                            lr=float(params['lr'])
+                        ).to(device)
+
+                        trainer = Trainer(model, train_loader, val_loader, device)
+                        trainer.setup_training(learning_rate=float(params['lr']))
+
+                        # Quick evaluation (3 epochs)
+                        for _ in range(3):
+                            trainer.train_epoch()
+                        metrics = trainer.validate_epoch()
+
+                        # Clean up
+                        del model
+                        torch.cuda.empty_cache()
+
+                        return -metrics['f1_score']  # Negative because SANGO minimizes
+                    except Exception as e:
+                        print(f"Error in fitness function: {str(e)}")
+                        return float('inf')
+
+                best_params = sango.optimize(fitness_function)
+                print("\nBest parameters found by SANGO:")
+                for param, value in best_params.items():
+                    print(f"  {param}: {value}")
+
+                # Create model with best parameters
+                model = create_paper_model_with_sango(**best_params).to(device)
+                learning_rate = best_params['lr']
+
+            except Exception as e:
+                print(f"\nError during SANGO optimization: {str(e)}")
+                print("Falling back to default parameters...")
+                model = PaperMultiModelDR().to(device)
+                learning_rate = LEARNING_RATE
+        else:
+            # Use best params from first fold if available
+            if fold > 1 and use_sango and 'best_params' in locals():
+                print(f"\n📋 Using optimized params from Fold 1")
+                model = create_paper_model_with_sango(**best_params).to(device)
                 learning_rate = best_params['lr']
             else:
                 print(f"\n📋 Using default parameters")
-                model = PaperMultiModelDR(
-                    num_classes=CLASSIFICATION_CLASSES,
-                    segmentation_classes=SEGMENTATION_CLASSES
-                )
+                model = PaperMultiModelDR().to(device)
                 learning_rate = LEARNING_RATE
 
         # Setup trainer
-        trainer = Trainer(
-            model=model,
-            train_loader=train_loader,
-            val_loader=val_loader,
-            device=device
-        )
+        trainer = Trainer(model, train_loader, val_loader, device)
+        trainer.setup_training(learning_rate=learning_rate)
 
-        trainer.setup_training(
-            learning_rate=learning_rate,
-            optimizer_type='adamw',
-            scheduler_type='cosine'
-        )
+        try:
+            # Train
+            print(f"\n🚀 Training Fold {fold}...")
+            history = trainer.train(num_epochs=NUM_EPOCHS)
 
-        # Train
-        print(f"\n🚀 Training Fold {fold + 1}...")
-        history = trainer.train(num_epochs=NUM_EPOCHS)
+            # Get final validation metrics
+            final_metrics = trainer.validate_epoch()
 
-        # Get final validation metrics
-        final_metrics = trainer.validate_epoch()
+            fold_results.append({
+                'fold': fold,
+                'f1_score': final_metrics['f1_score'],
+                'accuracy': final_metrics['accuracy'],
+                'loss': final_metrics['loss']
+            })
 
-        fold_results.append({
-            'fold': fold + 1,
-            'f1_score': final_metrics['f1_score'],
-            'accuracy': final_metrics['accuracy'],
-            'loss': final_metrics['loss']
-        })
+            print(f"\n✓ Fold {fold} Complete:")
+            print(f"  F1-Score: {final_metrics['f1_score']:.4f}")
+            print(f"  Accuracy: {final_metrics['accuracy']:.4f}")
 
-        print(f"\n✓ Fold {fold + 1} Complete:")
-        print(f"  F1-Score: {final_metrics['f1_score']:.4f}")
-        print(f"  Accuracy: {final_metrics['accuracy']:.4f}")
+        except Exception as e:
+            print(f"\nError during training: {str(e)}")
+            continue
 
         # Cleanup
-        del model, trainer, train_loader, val_loader
+        del model, trainer
         torch.cuda.empty_cache()
 
-    # Summary
-    print(f"\n{'=' * 70}")
-    print("CROSS-VALIDATION SUMMARY")
-    print(f"{'=' * 70}")
+    # Print summary
+    if fold_results:
+        print(f"\n{'=' * 70}")
+        print("CROSS-VALIDATION SUMMARY")
+        print(f"{'=' * 70}")
 
-    avg_f1 = np.mean([r['f1_score'] for r in fold_results])
-    std_f1 = np.std([r['f1_score'] for r in fold_results])
-    avg_acc = np.mean([r['accuracy'] for r in fold_results])
+        avg_f1 = np.mean([r['f1_score'] for r in fold_results])
+        std_f1 = np.std([r['f1_score'] for r in fold_results])
+        avg_acc = np.mean([r['accuracy'] for r in fold_results])
 
-    print(f"\nAverage F1-Score: {avg_f1:.4f} ± {std_f1:.4f}")
-    print(f"Average Accuracy: {avg_acc:.4f}")
+        print(f"\nAverage F1-Score: {avg_f1:.4f} ± {std_f1:.4f}")
+        print(f"Average Accuracy: {avg_acc:.4f}")
 
-    print("\nPer-fold results:")
-    for result in fold_results:
-        print(f"  Fold {result['fold']}: F1={result['f1_score']:.4f}, "
-              f"Acc={result['accuracy']:.4f}")
+        print("\nPer-fold results:")
+        for result in fold_results:
+            print(f"  Fold {result['fold']}: F1={result['f1_score']:.4f}, "
+                  f"Acc={result['accuracy']:.4f}")
 
     return fold_results
 
